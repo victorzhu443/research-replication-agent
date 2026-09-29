@@ -71,14 +71,22 @@ def _window(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
 # ------------------------------------------------------------------- portfolio-level pipeline
 
 def portfolio_pipeline(config: dict[str, Any], seed: int = 0) -> tuple[dict[str, float], dict[str, Any]]:
-    """config keys: french_name ('10_mom'), weighting ('VW'|'EW'), sample_start, sample_end,
-    long_leg / short_leg (column names or 'top'/'bottom'), nw_lags, _shuffle_labels."""
+    """config keys: french_name ('10_mom' | '10_size' | '10_bm' | '10_op' | '10_inv' | '10_str' | '10_ltr' | '10_ind'),
+    weighting ('VW'|'EW'), split ('decile'|'quintile'|'tercile' for the Formed_on_X files), sign (+1 high-minus-low,
+    -1 low-minus-high), holding_months, return_def, nw_lags, overlap_inference, sample_start, sample_end, _shuffle_labels."""
     name = config.get("french_name", "10_mom")
     weighting = config.get("weighting", "VW")
     ports, key = french.fetch({"name": name, "weighting": weighting})
     ff3, key_f = french.fetch({"name": "ff3"})
     ports = _window(ports, config)
     cols = [c for c in ports.columns if c != "date"]
+    # French "Portfolios_Formed_on_ME/BE-ME/OP/INV" files hold tercile, quintile and decile
+    # splits side by side; pick one split. Prior-return and industry files have one split.
+    split = config.get("split", "decile")
+    pats = {"decile": ("Lo 10", "Dec ", "Hi 10"), "quintile": ("Lo 20", "Qnt ", "Hi 20"), "tercile": ("Lo 30", "Med 40", "Hi 30")}[split]
+    sel = [c for c in cols if any(c.startswith(pt) for pt in pats)]
+    if sel:
+        cols = sel
     K = len(cols)
     df = ports.rename(columns={c: f"d{i+1}" for i, c in enumerate(cols)})
     if config.get("_shuffle_labels"):
@@ -94,6 +102,8 @@ def portfolio_pipeline(config: dict[str, Any], seed: int = 0) -> tuple[dict[str,
     else:
         cohort = df[top] - df[bot]
     h = int(config.get("holding_months", 1) or 1)
+    if int(config.get("sign", 1)) < 0:      # low-minus-high strategies (reversal, size, investment)
+        cohort = -cohort
     df["ls"] = cohort.rolling(h, min_periods=h).mean() if h > 1 else cohort
     metrics = evaluate(df, ff3, config)
     metrics["_shuffled"] = bool(config.get("_shuffle_labels"))

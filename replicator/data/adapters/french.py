@@ -26,6 +26,10 @@ FILES = {
     "10_str": "10_Portfolios_Prior_1_0_CSV.zip",
     "10_ltr": "10_Portfolios_Prior_60_13_CSV.zip",
     "10_ind": "10_Industry_Portfolios_CSV.zip",
+    "10_beta": "Portfolios_Formed_on_BETA_CSV.zip",
+    "10_var": "Portfolios_Formed_on_VAR_CSV.zip",
+    "10_ac": "Portfolios_Formed_on_AC_CSV.zip",
+    "10_ni": "Portfolios_Formed_on_NI_CSV.zip",
 }
 
 
