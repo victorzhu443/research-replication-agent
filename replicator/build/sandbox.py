@@ -228,19 +228,27 @@ class Sandbox:
             except (ValueError, OSError):
                 continue
 
-    def _container_argv(self, argv: list[str], env: dict[str, str], name: str) -> list[str]:
+    def _container_argv(self, argv: list[str], env: dict[str, str], name: str, cpu_s: int | None = None) -> list[str]:
         """The `docker run` command for one call. The work dir is the only writable mount; the
         adapter cache (`data_cache/`, pre-staged by the orchestrator outside the sandbox) is mounted
         read-only at the path `replicator.data.cache.CACHE_ROOT` resolves to inside the image.
-        Memory is bounded by `--memory` (cgroup), not the RSS watchdog, in this mode."""
+        Memory is bounded by `--memory` (cgroup), not the RSS watchdog, in this mode; processes by
+        `--pids-limit`; file size and CPU by the same rlimits local mode sets, passed as `--ulimit`.
+        The process runs as the host uid:gid (`--user`), not the image's `sandbox` user: the work dir
+        is a host directory owned by the orchestrator's user, and on a Linux host a different uid in
+        the container cannot write it (the containment matrix's preflight caught exactly that)."""
         env = {**env, "PYTHONPATH": "/work:/app", "HOME": "/tmp",
                "HF_HOME": "/app/data_cache/hf", "TORCH_HOME": "/app/data_cache/torch"}
         env_file = self.home / f"env-{name}.list"
         env_file.write_text("".join(f"{k}={v}\n" for k, v in env.items() if "\n" not in v))
         inner = ["python" if a == sys.executable else a for a in argv]
+        ulimits = ["--ulimit", f"fsize={self.max_file_bytes}:{self.max_file_bytes}"]
+        if cpu_s is not None:
+            ulimits += ["--ulimit", f"cpu={int(cpu_s)}:{int(cpu_s) + 30}"]
         return ["docker", "run", "--rm", "--name", name, "--network", "bridge" if self.network else "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--memory", f"{max(1, self.mem_bytes // (1024 ** 2))}m", "--pids-limit", "64",
+                "--user", f"{os.getuid()}:{os.getgid()}",
+                "--memory", f"{max(1, self.mem_bytes // (1024 ** 2))}m", "--pids-limit", "64", *ulimits,
                 "--tmpfs", "/tmp", "-v", f"{self.workdir.resolve()}:/work:rw",
                 "-v", f"{DATA_CACHE}:/app/data_cache:ro", "-w", "/work",
                 "--env-file", str(env_file), self.image, *inner]
@@ -262,10 +270,10 @@ class Sandbox:
         penv = self.env(env)
         t0 = time.time()
         container = f"sandbox-{uuid.uuid4().hex[:12]}" if self.backend == "container" else None
+        cpu_s = timeout_s * max(1, os.cpu_count() or 1)
         if container:
-            popen_argv, popen_env, preexec = self._container_argv(argv, penv, container), None, None
+            popen_argv, popen_env, preexec = self._container_argv(argv, penv, container, cpu_s), None, None
         else:
-            cpu_s = timeout_s * max(1, os.cpu_count() or 1)
             popen_argv, popen_env, preexec = argv, penv, (lambda: self._limits(cpu_s))
         proc = subprocess.Popen(popen_argv, cwd=self.workdir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, env=popen_env, preexec_fn=preexec, start_new_session=True)

@@ -1,0 +1,377 @@
+{
+  "schema": 1,
+  "generated_by": "tests/security/containment/matrix.py",
+  "legend": {
+    "PASS": "the probe was blocked, as claimed",
+    "FAIL": "the probe succeeded where the sandbox claims to block it (a finding)",
+    "N-A": "not enforced in this mode by design; the reason is in the cell, the outcome is still recorded",
+    "ERROR": "the probe could not be run or its verdict could not be read (a failure)",
+    "not run": "this mode has not been measured on any machine yet"
+  },
+  "parameters": {
+    "probe_timeout_s": 30,
+    "mem_gb": 0.06,
+    "alloc_mib": 300,
+    "fsize_limit_bytes": 1048576,
+    "fsize_write_bytes": 4194304,
+    "nproc": 32,
+    "fork_attempts": 96,
+    "timeout_probe_s": 2
+  },
+  "probes": {
+    "env": {
+      "what": "read the orchestrator's canary environment variable",
+      "threat": "credential leak by inheritance"
+    },
+    "cwd": {
+      "what": "write a file by relative path",
+      "threat": "generated code writing into the orchestrator's own directory"
+    },
+    "abs-write": {
+      "what": "write a file by absolute path, and by `..`, outside the work dir",
+      "threat": "filesystem access outside the run dir"
+    },
+    "socket": {
+      "what": "TCP connect to 127.0.0.1 on a closed port",
+      "threat": "network reachability (loopback)"
+    },
+    "egress": {
+      "what": "UDP connect() to a TEST-NET-1 address: a route lookup, no packet sent",
+      "threat": "network egress"
+    },
+    "pids": {
+      "what": "fork 96 sleeping children",
+      "threat": "process exhaustion"
+    },
+    "memory": {
+      "what": "allocate and touch 300 MiB under a 61 MiB limit",
+      "threat": "memory exhaustion"
+    },
+    "fsize": {
+      "what": "write a 4 MiB file under a 1 MiB limit",
+      "threat": "disk exhaustion"
+    },
+    "timeout": {
+      "what": "spawn a grandchild and sleep past a 2s wall clock",
+      "threat": "runaway process; orphaned grandchild"
+    }
+  },
+  "claims": {
+    "env": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "allow-listed environment (secprim.child_env)"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "allow-listed environment via --env-file"
+      }
+    },
+    "cwd": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "cwd pinned to the work dir"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "-w /work, the work dir bind-mounted"
+      }
+    },
+    "abs-write": {
+      "local": {
+        "claim": "advisory",
+        "enforced_by": "cwd is a convenience, not a jail: absolute and `..` paths reach anything the user can write; the container backend makes the work dir the only writable mount"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "--read-only root filesystem; the work dir is the only writable bind mount"
+      }
+    },
+    "socket": {
+      "local": {
+        "claim": "advisory",
+        "enforced_by": "network is NOT restricted in local mode (the run-log banner says so)"
+      },
+      "container": {
+        "claim": "advisory",
+        "enforced_by": "loopback stays reachable under --network none; the claim is no egress, measured by the egress row"
+      }
+    },
+    "egress": {
+      "local": {
+        "claim": "advisory",
+        "enforced_by": "network is NOT restricted in local mode (the run-log banner says so)"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "--network none: no route off the container"
+      }
+    },
+    "pids": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "RLIMIT_NPROC (counts every process of this uid)"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "--pids-limit 64 (cgroup)"
+      }
+    },
+    "memory": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "RLIMIT_AS where it is live (Linux); the RSS watchdog kills the process group where RLIMIT_AS is advisory (macOS)"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "--memory (cgroup)"
+      }
+    },
+    "fsize": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "RLIMIT_FSIZE"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "--ulimit fsize"
+      }
+    },
+    "timeout": {
+      "local": {
+        "claim": "blocked",
+        "enforced_by": "wall clock kills the whole process group"
+      },
+      "container": {
+        "claim": "blocked",
+        "enforced_by": "wall clock runs `docker kill` by container name"
+      }
+    }
+  },
+  "runs": {
+    "local": {
+      "mode": "local",
+      "ran_at": "2026-11-26T18:36:56+00:00",
+      "host": "macOS-26.6.2-arm64-arm-64bit (arm64)",
+      "python": "3.12.14",
+      "sandbox_commit": "00e7d8c5adef",
+      "sandbox_sha256": "15f3cd5ee2f87610ca9ecf6060e5e8f7899130e835fcbe4c0f2245c3c6413dcd",
+      "banner": "sandbox backend=local: network is NOT restricted",
+      "backend_detail": "subprocess, python /Users/vzhu/Developer/projects/research-replication-agent/.venv/bin/python",
+      "workdir_root": "/var/folders/x4/srj78fr145x2j4yv16tn91v40000gn/T",
+      "cells": {
+        "env": {
+          "probe": "env",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "allow-listed environment (secprim.child_env)",
+          "detail": "EVAL_CONTAINMENT_CANARY is not in the child's environment",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "cwd": {
+          "probe": "cwd",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "cwd pinned to the work dir",
+          "detail": "relative write landed at box/work/escaped-canary-d346a0306e25.txt",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "abs-write": {
+          "probe": "abs-write",
+          "mode": "local",
+          "status": "N-A",
+          "outcome": "succeeded",
+          "claim": "advisory",
+          "enforced_by": "cwd is a convenience, not a jail: absolute and `..` paths reach anything the user can write; the container backend makes the work dir the only writable mount",
+          "detail": "a file landed outside the work dir via absolute path and .. (absolute: wrote; dotdot: wrote)",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "socket": {
+          "probe": "socket",
+          "mode": "local",
+          "status": "N-A",
+          "outcome": "succeeded",
+          "claim": "advisory",
+          "enforced_by": "network is NOT restricted in local mode (the run-log banner says so)",
+          "detail": "the connect attempt reached the network stack (refused: the attempt reached the network stack)",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "egress": {
+          "probe": "egress",
+          "mode": "local",
+          "status": "N-A",
+          "outcome": "succeeded",
+          "claim": "advisory",
+          "enforced_by": "network is NOT restricted in local mode (the run-log banner says so)",
+          "detail": "the kernel found a route to 192.0.2.1 (egress possible)",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "pids": {
+          "probe": "pids",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "RLIMIT_NPROC (counts every process of this uid)",
+          "detail": "fork refused after 0/96 children: errno 35 Resource temporarily unavailable (RLIMIT_NPROC=32, counted over every process of this uid)",
+          "rc": 0,
+          "seconds": 0.02
+        },
+        "memory": {
+          "probe": "memory",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "RLIMIT_AS where it is live (Linux); the RSS watchdog kills the process group where RLIMIT_AS is advisory (macOS)",
+          "detail": "300 MiB under a 61 MiB limit: the RSS watchdog killed the process group (rc 137), 0.3s after start",
+          "rc": 137,
+          "seconds": 0.28
+        },
+        "fsize": {
+          "probe": "fsize",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "RLIMIT_FSIZE",
+          "detail": "the write stopped at 1048576 bytes (limit 1048576; rc=1; OSError: [Errno 27] File too large)",
+          "rc": 1,
+          "seconds": 0.03
+        },
+        "timeout": {
+          "probe": "timeout",
+          "mode": "local",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "wall clock kills the whole process group",
+          "detail": "child and grandchild gone 2.0s after start (rc 124)",
+          "rc": 124,
+          "seconds": 2.01
+        }
+      }
+    },
+    "container": {
+      "mode": "container",
+      "ran_at": "2026-11-26T18:31:22+00:00",
+      "host": "Linux-7.0.0-1020-azure-x86_64-with-glibc2.43 (x86_64)",
+      "python": "3.12.16",
+      "sandbox_commit": "17054ccf3dc6",
+      "sandbox_sha256": "15f3cd5ee2f87610ca9ecf6060e5e8f7899130e835fcbe4c0f2245c3c6413dcd",
+      "banner": "sandbox backend=container: image=replicator-sandbox:probe, network=none",
+      "backend_detail": "image replicator-sandbox:probe (sha256:843e8f7750f5d8a26a48fb2597c8d734884d9ccdc621db84e47c1d6204cef1e7); server 29.4.2 client 29.4.2",
+      "workdir_root": "/tmp",
+      "cells": {
+        "env": {
+          "probe": "env",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "allow-listed environment via --env-file",
+          "detail": "EVAL_CONTAINMENT_CANARY is not in the child's environment",
+          "rc": 0,
+          "seconds": 0.21
+        },
+        "cwd": {
+          "probe": "cwd",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "-w /work, the work dir bind-mounted",
+          "detail": "relative write landed at box/work/escaped-canary-e6bea79686e3.txt",
+          "rc": 0,
+          "seconds": 0.24
+        },
+        "abs-write": {
+          "probe": "abs-write",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "--read-only root filesystem; the work dir is the only writable bind mount",
+          "detail": "nothing landed outside the work dir (absolute: errno 2 No such file or directory; dotdot: errno 30 Read-only file system)",
+          "rc": 0,
+          "seconds": 0.22
+        },
+        "socket": {
+          "probe": "socket",
+          "mode": "container",
+          "status": "N-A",
+          "outcome": "succeeded",
+          "claim": "advisory",
+          "enforced_by": "loopback stays reachable under --network none; the claim is no egress, measured by the egress row",
+          "detail": "the connect attempt reached the network stack (refused: the attempt reached the network stack)",
+          "rc": 0,
+          "seconds": 0.2
+        },
+        "egress": {
+          "probe": "egress",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "--network none: no route off the container",
+          "detail": "no route: errno 101 Network is unreachable",
+          "rc": 0,
+          "seconds": 0.2
+        },
+        "pids": {
+          "probe": "pids",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "--pids-limit 64 (cgroup)",
+          "detail": "fork refused after 63/96 children: errno 11 Resource temporarily unavailable (--pids-limit 64)",
+          "rc": 0,
+          "seconds": 0.23
+        },
+        "memory": {
+          "probe": "memory",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "--memory (cgroup)",
+          "detail": "300 MiB under a 61 MiB limit: killed with rc 137 (cgroup --memory), 0.3s after start",
+          "rc": 137,
+          "seconds": 0.27
+        },
+        "fsize": {
+          "probe": "fsize",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "--ulimit fsize",
+          "detail": "the write stopped at 1048576 bytes (limit 1048576; rc=1; OSError: [Errno 27] File too large)",
+          "rc": 1,
+          "seconds": 0.2
+        },
+        "timeout": {
+          "probe": "timeout",
+          "mode": "container",
+          "status": "PASS",
+          "outcome": "blocked",
+          "claim": "blocked",
+          "enforced_by": "wall clock runs `docker kill` by container name",
+          "detail": "child and grandchild gone 2.1s after start (rc 124)",
+          "rc": 124,
+          "seconds": 2.07
+        }
+      }
+    }
+  }
+}

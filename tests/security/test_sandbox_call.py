@@ -141,10 +141,12 @@ def test_backend_resolution(monkeypatch, tmp_path):
 def test_container_command_shape(monkeypatch, tmp_path):
     monkeypatch.setenv("REPLICATOR_SANDBOX_BACKEND", "local")
     sb = Sandbox(tmp_path / "w", mem_gb=2)
-    argv = sb._container_argv([os.sys.executable, "_runner.py", "_call_x.json"], sb.env({"SEED": "1"}), "sandbox-abc")
+    argv = sb._container_argv([os.sys.executable, "_runner.py", "_call_x.json"], sb.env({"SEED": "1"}), "sandbox-abc", cpu_s=300)
     joined = " ".join(argv)
     for flag in ("--rm", "--name sandbox-abc", "--network none", "--read-only", "--cap-drop ALL",
                  "--security-opt no-new-privileges", "--memory 2048m", "--pids-limit 64", "--tmpfs /tmp", "-w /work",
+                 f"--ulimit fsize={sb.max_file_bytes}:{sb.max_file_bytes}", "--ulimit cpu=300:330",
+                 f"--user {os.getuid()}:{os.getgid()}",  # the work dir is a host dir owned by this uid
                  "--env-file", "/app/data_cache:ro"):
         assert flag in joined, flag
     assert f"{(tmp_path / 'w').resolve()}:/work:rw" in argv
@@ -159,7 +161,7 @@ def test_container_timeout_kills_the_container_not_just_the_client(work, monkeyp
     killed: list[str] = []
     sb = Sandbox(work)
     sb.backend = "container"  # exercise the container code path with a stand-in for `docker run`
-    monkeypatch.setattr(sb, "_container_argv", lambda argv, env, name: ["sleep", "60"])
+    monkeypatch.setattr(sb, "_container_argv", lambda argv, env, name, cpu_s=None: ["sleep", "60"])
     monkeypatch.setattr(Sandbox, "_docker_kill", staticmethod(lambda name: killed.append(name)))
     r = sb.run(["python", "-c", "pass"], timeout_s=1)
     assert r.returncode == 124 and len(killed) == 1 and killed[0].startswith("sandbox-")

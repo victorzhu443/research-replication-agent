@@ -1,8 +1,11 @@
 name: security
-# Three enforcement jobs (DESIGN §2.3), shaped after security-agents/.github/workflows/ci.yml:
-#   security-tests  pytest tests/security/   (sandbox boundary, no in-process exec, fetch, LLM01, fuzz)
-#   sast            Semgrep: toolkit rules + p/python + p/secrets
-#   sca             pip-audit against the lockfile; fails on any known vulnerability
+# Four enforcement jobs (DESIGN §2.3), shaped after security-agents/.github/workflows/ci.yml:
+#   security-tests      pytest tests/security/   (sandbox boundary, no in-process exec, fetch, LLM01, fuzz)
+#   sast                Semgrep: toolkit rules + p/python + p/secrets
+#   sca                 pip-audit against the lockfile; fails on any known vulnerability
+#   containment-matrix  benign probes through the real Sandbox, local mode and (docker permitting)
+#                       container mode; uploads security/containment-matrix.{json,md}; fails on any
+#                       cell SECURITY.md claims as blocked that did not measure PASS
 #
 # The shared toolkit (security-agents) is a public git dependency, so the jobs run anonymously.
 # The optional repository secret `TOOLKIT_TOKEN` (a read-only token; the name the toolkit's
@@ -34,6 +37,52 @@ jobs:
       - name: Security suite (sandbox backend forced local in CI; no docker image here)
         run: uv run python -m pytest tests/security/ -q
         env: { REPLICATOR_SANDBOX_BACKEND: local }
+
+  # P3 measured, not described: every probe x mode cell in security/containment-matrix.md is produced
+  # here. `local` always runs; `container` runs when the runner's docker daemon answers, against a
+  # python:3.12-slim stand-in for the sandbox image (the real one is too large to build on a runner;
+  # the flags under test are the Sandbox's own). The test step reads the matrix this job just wrote.
+  containment-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262          # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86        # v5 (v5.4.2)
+        with: { python-version: "3.12" }
+      - name: Use TOOLKIT_TOKEN for github.com if it is set (public repo, anonymous otherwise)
+        env: { TOOLKIT_TOKEN: "${{ secrets.TOOLKIT_TOKEN }}" }
+        run: |
+          if [ -n "$TOOLKIT_TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "TOOLKIT_TOKEN not set; fetching the public toolkit anonymously"
+          fi
+      - run: uv sync --dev
+      - name: Container mode if docker is available (detect, never install)
+        id: docker
+        run: |
+          if docker info >/dev/null 2>&1; then
+            docker build -f tests/security/containment/Dockerfile.probe -t replicator-sandbox:probe .
+            echo "REPLICATOR_SANDBOX_IMAGE=replicator-sandbox:probe" >> "$GITHUB_ENV"
+            echo "modes=local,container" >> "$GITHUB_OUTPUT"
+          else
+            echo "docker daemon not reachable on this runner; local mode only"
+            echo "modes=local" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Generate the matrix
+        run: uv run python -m tests.security.containment.matrix --modes "${{ steps.docker.outputs.modes }}" --out "$RUNNER_TEMP/containment" --no-security-md
+      - name: Show it
+        if: always()
+        run: cat "$RUNNER_TEMP/containment/containment-matrix.md" || true
+      - name: Assert every claimed cell (and that the committed copies are copies)
+        if: always()
+        run: uv run python -m pytest tests/security/containment -q -ra
+        env: { CONTAINMENT_MATRIX_FRESH: "${{ runner.temp }}/containment/containment-matrix.json" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02      # v4.6.2
+        if: always()
+        with:
+          name: containment-matrix
+          path: ${{ runner.temp }}/containment/containment-matrix.*
+          if-no-files-found: warn
 
   sast:
     runs-on: ubuntu-latest
