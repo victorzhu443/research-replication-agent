@@ -133,16 +133,63 @@ def test_backend_resolution(monkeypatch, tmp_path):
 def test_container_command_shape(monkeypatch, tmp_path):
     monkeypatch.setenv("REPLICATOR_SANDBOX_BACKEND", "local")
     sb = Sandbox(tmp_path / "w", mem_gb=2)
-    argv = sb._container_argv([os.sys.executable, "_runner.py", "_call_x.json"], sb.env({"SEED": "1"}))
+    argv = sb._container_argv([os.sys.executable, "_runner.py", "_call_x.json"], sb.env({"SEED": "1"}), "sandbox-abc")
     joined = " ".join(argv)
-    for flag in ("--rm", "--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges",
-                 "--memory 2048m", "--pids-limit 64", "--tmpfs /tmp", "-w /work", "--env-file"):
+    for flag in ("--rm", "--name sandbox-abc", "--network none", "--read-only", "--cap-drop ALL",
+                 "--security-opt no-new-privileges", "--memory 2048m", "--pids-limit 64", "--tmpfs /tmp", "-w /work",
+                 "--env-file", "/app/data_cache:ro"):
         assert flag in joined, flag
     assert f"{(tmp_path / 'w').resolve()}:/work:rw" in argv
     assert argv[-3:] == ["python", "_runner.py", "_call_x.json"]
     env_file = argv[argv.index("--env-file") + 1]
     lines = open(env_file).read().splitlines()
     assert "SEED=1" in lines and "PYTHONPATH=/work:/app" in lines and not any(l.startswith("ANTHROPIC") for l in lines)
+
+
+def test_container_timeout_kills_the_container_not_just_the_client(work, monkeypatch):
+    """Killing the `docker run` client leaves the container alive; the sandbox must `docker kill` by name."""
+    killed: list[str] = []
+    sb = Sandbox(work)
+    sb.backend = "container"  # exercise the container code path with a stand-in for `docker run`
+    monkeypatch.setattr(sb, "_container_argv", lambda argv, env, name: ["sleep", "60"])
+    monkeypatch.setattr(Sandbox, "_docker_kill", staticmethod(lambda name: killed.append(name)))
+    r = sb.run(["python", "-c", "pass"], timeout_s=1)
+    assert r.returncode == 124 and len(killed) == 1 and killed[0].startswith("sandbox-")
+
+
+def test_log_lives_outside_the_model_writable_dir(work):
+    sb = Sandbox(work)
+    assert work.resolve() not in sb.log_path.resolve().parents
+
+
+def test_cs_reproduce_runs_through_the_sandbox(work):
+    """The CS track is not a second exec path: reproduce.sh runs under Sandbox.run (same env, limits, wall clock)."""
+    from replicator.templates import cs_eval
+    (work / "reproduce.sh").write_text("#!/usr/bin/env bash\nsleep 30\n")
+    sb = Sandbox(work)
+    with pytest.raises(RuntimeError, match="timed out"):
+        cs_eval.run_reproduce(work, {"_smoke": True}, 0, timeout_s=1, sandbox=sb)
+    recs = [json.loads(l) for l in sb.log_path.read_text().splitlines()]
+    assert any(r.get("tag") == "reproduce:seed0" and r.get("rc") == 124 for r in recs)
+    (work / "reproduce.sh").write_text(
+        '#!/usr/bin/env bash\nprintf \'{"seed":%s,"split":"s","n_examples":1,"scale":1.0,"metrics":{"home":"%s"}}\' "$SEED" "$HOME" > "$METRICS_OUT"\n')
+    out = cs_eval.run_reproduce(work, {"_smoke": True}, 3, timeout_s=30, sandbox=sb)
+    assert out["seed"] == 3 and out["metrics"]["home"] == str(sb.home)
+
+
+def test_banner_is_in_the_orchestrator_run_log(tmp_path, monkeypatch):
+    """Regardless of track or prebuilt mode: stage_setup writes the backend banner to orchestrator.log,
+    and the sandbox log sits in the run root, not under work/."""
+    from pathlib import Path as _P
+    from replicator.orchestrator import Orchestrator
+    from replicator.schema import Spec
+    monkeypatch.setenv("REPLICATOR_SANDBOX_BACKEND", "local")
+    root = _P(__file__).resolve().parents[2]
+    orch = Orchestrator(tmp_path / "run", batch=True)
+    spec = orch.stage_triage(Spec.load(root / "papers/momentum_french/spec.yaml"))
+    orch.stage_setup(spec)
+    assert BANNER_LOCAL in (tmp_path / "run" / "orchestrator.log").read_text()
+    assert orch.sandbox.log_path == tmp_path / "run" / "sandbox_log.jsonl"
 
 
 def test_provenance_monitor_keeps_old_name_and_behavior(work):

@@ -117,6 +117,7 @@ class Orchestrator:
     def stage_setup(self, spec: Spec) -> dict[str, Any]:
         spec.assert_frozen()
         self.work.mkdir(parents=True, exist_ok=True)
+        self.log(self.sandbox.banner)  # which execution boundary this run gets, in the run log, every run
         fam = family_kb(spec.paper.family.value)
         tmpl = fam["template"].split(".")[-1] + ".py"
         shutil.copy(TEMPLATE_DIR / tmpl, self.work / f"template_{tmpl}")
@@ -140,7 +141,7 @@ class Orchestrator:
         """The one execution boundary for model-authored code. `pipeline.py` is never imported into
         this process: every call crosses as JSON/parquet through `Sandbox.call`."""
         if self._sandbox is None:
-            self._sandbox = Sandbox(self.work, logger=self.log)
+            self._sandbox = Sandbox(self.work, log_path=self.root / "sandbox_log.jsonl")
         return self._sandbox
 
     def _require_pipeline(self) -> None:
@@ -153,7 +154,7 @@ class Orchestrator:
             timeout = spec.plan.budget.run_timeout_s
             return lambda cfg, seed: self.sandbox.call("pipeline", "run", {}, args=[cfg, seed], timeout_s=timeout)
         def _cs(cfg, seed):
-            r = cs_eval.run_reproduce(self.work, cfg, seed, timeout_s=spec.plan.budget.run_timeout_s)
+            r = cs_eval.run_reproduce(self.work, cfg, seed, timeout_s=spec.plan.budget.run_timeout_s, sandbox=self.sandbox)
             return {**r["metrics"], "_shuffled": bool(r.get("shuffled")), "_shuffle_na": bool(r.get("shuffle_not_applicable")),
                     "_intermediates": {"n_examples": r.get("n_examples"), "split": r.get("split"), "seed": r.get("seed"),
                                        "matched_scale": bool(r.get("matched_scale")), "scale": r.get("scale")}}
@@ -194,7 +195,7 @@ class Orchestrator:
                 if not (self.work / "reproduce.sh").exists():
                     out["problems"].append("reproduce.sh missing")
                     return out
-                r = cs_eval.run_reproduce(self.work, cfg, 0, timeout_s=min(600, spec.plan.budget.run_timeout_s))
+                r = cs_eval.run_reproduce(self.work, cfg, 0, timeout_s=min(600, spec.plan.budget.run_timeout_s), sandbox=self.sandbox)
                 out["metrics"] = r["metrics"]
                 if probe_scale:
                     self._scale_probe(spec, out)
@@ -220,7 +221,7 @@ class Orchestrator:
         Rejects a build whose full run would not fit the per-run timeout."""
         t = time.time()
         try:
-            cs_eval.run_reproduce(self.work, {**spec.default_config(), "_scale": 0.1}, 0,
+            cs_eval.run_reproduce(self.work, {**spec.default_config(), "_scale": 0.1}, 0, sandbox=self.sandbox,
                                   timeout_s=min(600, spec.plan.budget.run_timeout_s))
             t10 = time.time() - t
             est = t10 * 10
@@ -250,7 +251,7 @@ class Orchestrator:
         if hm not in r["metrics"]:
             return  # already reported as a missing metric
         try:
-            rs = cs_eval.run_reproduce(self.work, {**cfg, "_shuffle_labels": True}, 0,
+            rs = cs_eval.run_reproduce(self.work, {**cfg, "_shuffle_labels": True}, 0, sandbox=self.sandbox,
                                        timeout_s=min(600, spec.plan.budget.run_timeout_s))
         except Exception as e:  # noqa: BLE001
             out["problems"].append(f"shuffled SMOKE run failed: {str(e)[:200]}")
@@ -284,7 +285,7 @@ class Orchestrator:
         else:
             from .build.builder import Builder
             llm = self._llm(spec.plan.budget.max_cost_usd)
-            b = Builder(llm, spec, self.work, lambda: self.smoke(spec), spec.plan.budget.build)
+            b = Builder(llm, spec, self.work, lambda: self.smoke(spec), spec.plan.budget.build, sandbox=self.sandbox)
             res = b.run()
         if res.get("blacklist_hits") and spec.plan.kind_of_test == "re_implementation":
             spec.plan.kind_of_test = "reproduction"

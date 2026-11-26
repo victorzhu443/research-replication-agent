@@ -9,71 +9,37 @@ Oracle-first: if the repo already has an eval script for released weights, `repr
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-
-_HOME: Path | None = None
-
-
-def _sandbox_home() -> Path:
-    """One throwaway HOME per orchestrator process for reproduce.sh (caches are pinned to data_cache/)."""
-    global _HOME
-    if _HOME is None:
-        import tempfile
-        _HOME = Path(tempfile.mkdtemp(prefix="replicator-home-"))
-    return _HOME
+if TYPE_CHECKING:  # pragma: no cover
+    from ..build.sandbox import Sandbox
 
 
 def run_reproduce(workdir: Path, config: dict[str, Any], seed: int, timeout_s: int = 1800,
-                  python: str | None = None) -> dict[str, Any]:
+                  python: str | None = None, sandbox: "Sandbox | None" = None) -> dict[str, Any]:
+    """One `bash reproduce.sh` run through the Sandbox — the same boundary as every other exec path:
+    allow-listed env, rlimits + RSS watchdog (local) or the container, and a wall clock that kills
+    the whole process group (a grandchild holding the pipe cannot hang the parent)."""
+    from ..build.sandbox import Sandbox
     workdir = workdir.resolve()
+    sb = sandbox or Sandbox(workdir)
     out = workdir / f"metrics_seed{seed}.json"
     if out.exists():
         out.unlink()
-    # Model-authored reproduce.sh gets an allow-listed environment (sandbox.sandbox_env): the
-    # per-run values below plus PATH/locale/cache locations, never the parent's credentials.
-    from ..build.sandbox import sandbox_env
     extra = {"SEED": str(seed), "REPLICATOR_CONFIG": json.dumps(config),
              "SMOKE": "1" if config.get("_smoke") else "0", "RUN_TIMEOUT_S": str(timeout_s),
              "SCALE": str(config.get("_scale", 1.0)), "TOKENIZERS_PARALLELISM": "false",
              "METRICS_OUT": str(out)}
     if python:
         extra["PYTHON"] = python
-    env = sandbox_env(workdir, extra, home=_sandbox_home())
-    # Run in its own process group so a timeout kills the training script and any workers it
-    # spawned, not just the bash wrapper (a surviving grandchild holding the pipe hangs the parent).
-    import signal
-    proc = subprocess.Popen(["bash", "reproduce.sh"], cwd=workdir, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, start_new_session=True)
-    # Independent wall-clock watchdog: kills the group at the deadline even if communicate()
-    # is blocked on a pipe held open by a grandchild.
-    import threading
-    def _watchdog():
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    wd = threading.Timer(timeout_s + 15, _watchdog)
-    wd.daemon = True
-    wd.start()
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait(timeout=30)
-        wd.cancel()
+    r = sb.run(["bash", "reproduce.sh"], timeout_s=timeout_s, env=extra, tag=f"reproduce:seed{seed}")
+    if r.returncode == 124:
         raise RuntimeError(f"reproduce.sh timed out after {timeout_s}s (seed {seed}); process group killed")
-    wd.cancel()
-    if proc.returncode != 0:
-        raise RuntimeError(f"reproduce.sh failed (seed {seed}):\n{stderr[-3000:]}")
+    if r.returncode != 0:
+        raise RuntimeError(f"reproduce.sh failed (seed {seed}):\n{r.stderr[-3000:]}")
     if not out.exists():
         raise RuntimeError("reproduce.sh did not write METRICS_OUT")
     return json.loads(out.read_text())

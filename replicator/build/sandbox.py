@@ -188,7 +188,8 @@ class Sandbox:
         self.nproc = nproc
         self.max_file_bytes = int(max_file_gb * 1024 ** 3)
         self.image = image or os.environ.get("REPLICATOR_SANDBOX_IMAGE", DEFAULT_IMAGE)
-        self.log_path = log_path or (self.workdir / "sandbox_log.jsonl")
+        # The log lives OUTSIDE the work dir: generated code can write anything under workdir.
+        self.log_path = log_path or (self.workdir.parent / "sandbox_log.jsonl")
         self.logger = logger
         self.blacklist_hits: list[str] = []
         self.home = Path(tempfile.mkdtemp(prefix="replicator-home-"))
@@ -227,19 +228,30 @@ class Sandbox:
             except (ValueError, OSError):
                 continue
 
-    def _container_argv(self, argv: list[str], env: dict[str, str]) -> list[str]:
-        """The `docker run` command for one call. The work dir is the only writable mount."""
+    def _container_argv(self, argv: list[str], env: dict[str, str], name: str) -> list[str]:
+        """The `docker run` command for one call. The work dir is the only writable mount; the
+        adapter cache (`data_cache/`, pre-staged by the orchestrator outside the sandbox) is mounted
+        read-only at the path `replicator.data.cache.CACHE_ROOT` resolves to inside the image.
+        Memory is bounded by `--memory` (cgroup), not the RSS watchdog, in this mode."""
         env = {**env, "PYTHONPATH": "/work:/app", "HOME": "/tmp",
-               "HF_HOME": "/data_cache/hf", "TORCH_HOME": "/data_cache/torch"}
-        env_file = self.home / f"env-{uuid.uuid4().hex[:8]}.list"
+               "HF_HOME": "/app/data_cache/hf", "TORCH_HOME": "/app/data_cache/torch"}
+        env_file = self.home / f"env-{name}.list"
         env_file.write_text("".join(f"{k}={v}\n" for k, v in env.items() if "\n" not in v))
         inner = ["python" if a == sys.executable else a for a in argv]
-        return ["docker", "run", "--rm", "--network", "bridge" if self.network else "none",
+        return ["docker", "run", "--rm", "--name", name, "--network", "bridge" if self.network else "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--memory", f"{max(1, self.mem_bytes // (1024 ** 2))}m", "--pids-limit", "64",
                 "--tmpfs", "/tmp", "-v", f"{self.workdir.resolve()}:/work:rw",
-                "-v", f"{DATA_CACHE}:/data_cache:ro", "-w", "/work",
+                "-v", f"{DATA_CACHE}:/app/data_cache:ro", "-w", "/work",
                 "--env-file", str(env_file), self.image, *inner]
+
+    @staticmethod
+    def _docker_kill(name: str) -> None:
+        """Killing the `docker run` client leaves the container running; kill it by name."""
+        try:
+            subprocess.run(["docker", "kill", name], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     # ------------------------------------------------------------------ exec
     def run(self, argv: list[str], timeout_s: int | None = None, env: dict | None = None, tag: str = "") -> ExecResult:
@@ -249,8 +261,9 @@ class Sandbox:
             self.blacklist_hits.append(cmd)
         penv = self.env(env)
         t0 = time.time()
-        if self.backend == "container":
-            popen_argv, popen_env, preexec = self._container_argv(argv, penv), None, None
+        container = f"sandbox-{uuid.uuid4().hex[:12]}" if self.backend == "container" else None
+        if container:
+            popen_argv, popen_env, preexec = self._container_argv(argv, penv, container), None, None
         else:
             cpu_s = timeout_s * max(1, os.cpu_count() or 1)
             popen_argv, popen_env, preexec = argv, penv, (lambda: self._limits(cpu_s))
@@ -264,6 +277,8 @@ class Sandbox:
             out, err = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             timed_out = True
+            if container:
+                self._docker_kill(container)
             _killpg(proc)
             try:
                 out, err = proc.communicate(timeout=30)

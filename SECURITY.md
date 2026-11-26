@@ -62,26 +62,31 @@ Each item is one line on *how*; the design holds the reasoning.
 
 | RC | Status | How |
 |---|---|---|
-| RC-3 sandbox | **FIXED** | `replicator/build/sandbox.py` is the single execution boundary. `_load_pipeline` (in-process `exec_module`) is deleted; the finance `run`, `raw_data`, `build_features`, `pit_audit` and the smoke attribute check go through `Sandbox.call`, a file-based RPC (`_runner.py`: JSON + parquet, per-call files, nothing live crosses). `cs_eval.run_reproduce` and the builder's `run_python` use the same env builder; `run_python.path` is checked with `contained_path`. Limits: `RLIMIT_CPU/NPROC/FSIZE/AS` where supported, plus an RSS watchdog (psutil) that kills the process group over `mem_gb` — enforced on macOS. Backend `auto` runs `docker run --network none --read-only --cap-drop ALL …` when `replicator-sandbox:latest` exists (`make sandbox-image`), else `local` with the banner `sandbox backend=local: network is NOT restricted` in the run log. `REPLICATOR_SANDBOX_BACKEND=local|container` is the rollback flag. `BLACKLIST` → `PROVENANCE_MONITOR` (alias kept). |
-| RC-4 fetch | **FIXED** | `spec/intake.py`: `fetch_arxiv` → `safe_fetch(url, allow_hosts=["arxiv.org"], max_bytes=64 MB)`; `fetch_html_as_text` → `safe_fetch(url, max_bytes=16 MB)`. Resolve once, connect to the validated address, hop-by-hop redirects, bounded body. |
+| RC-3 sandbox | **FIXED** | `replicator/build/sandbox.py` is the single execution boundary. `_load_pipeline` (in-process `exec_module`) is deleted; the finance `run`, `raw_data`, `build_features`, `pit_audit` and the smoke attribute check go through `Sandbox.call`, a file-based RPC (`_runner.py`: JSON + parquet, per-call files, nothing live crosses). `cs_eval.run_reproduce` runs `bash reproduce.sh` through `Sandbox.run` (not a second `Popen`), the Builder receives the orchestrator's Sandbox, and `run_python.path` is checked with `contained_path`; an AST test forbids `subprocess` anywhere in `replicator/` except `build/sandbox.py` (and the orchestrator's own `uv lock --check`, allow-listed by its literal argv). Limits: `RLIMIT_CPU/NPROC/FSIZE/AS` where supported, plus an RSS watchdog (psutil) that kills the process group over `mem_gb` — enforced on macOS. Backend `auto` runs `docker run --network none --read-only --cap-drop ALL …` when `replicator-sandbox:latest` exists (`make sandbox-image`), else `local` with the banner `sandbox backend=local: network is NOT restricted` written to `orchestrator.log` at `stage_setup` on every run (any track, prebuilt or not); `sandbox_log.jsonl` sits in the run root, outside the model-writable work dir. Container mode: each call is `--name sandbox-<id>` and a timeout runs `docker kill <name>` (killing only the client would leave the container running); memory there is bounded by `--memory`, the RSS watchdog is the local-mode equivalent. **The container path is untested end to end on this machine** (command shape and kill-by-name are unit-tested with a stand-in). `REPLICATOR_SANDBOX_BACKEND=local|container` is the rollback flag. `BLACKLIST` → `PROVENANCE_MONITOR` (alias kept). |
+| RC-4 fetch | **FIXED** | Every outbound fetch in `replicator/` goes through `secprim.safe_fetch` (resolve once, connect to the validated address, hop-by-hop redirects, bounded body): `spec/intake.py` `fetch_arxiv` (`allow_hosts=["arxiv.org"]`, 64 MB) and `fetch_html_as_text` (2 MB); `data/adapters/french.py` `probe`/`_download` (`allow_hosts=["mba.tuck.dartmouth.edu"]`, 50 MB, and the zip is budgeted with `safe_zip_members` before any member is read); `data/adapters/hf_datasets.py` `probe`/`probe_model`/`fetch` (`allow_hosts=["huggingface.co"]`, 5 MB, `json.loads` on the capped body). `httpx` is no longer imported anywhere in `replicator/`. |
+| RC-2 parsers | **FIXED** | `intake.html_to_text` strips tags in linear time (`<[^<>]+>` plus a single forward scan for script/style blocks; the previous `.*?</\1>` and `<[^>]+>` patterns were quadratic on hostile markup). `redos_probe` over every pattern and `size_sweep` over the whole function are in `tests/security/`; `html_to_text`, `french._parse_block` and `hf_datasets.parse_dataset_info` are registered with `assert_robust`. |
 | RC-5 secrets | **FIXED** | `sandbox_env()` = `secprim.child_env` over an explicit allow-list (PATH, locale, cache dirs, thread/device knobs, the per-run values) + throwaway HOME; `scrub_secrets` and `assert_no_secrets` stay as the second check before every exec. |
 | RC-7 supply chain | **FIXED** | `uv remove pypdf` (declared, never imported); `urllib3` 2.7.0→2.8.0, `setuptools` 84.0.0→84.2.1, `aiohttp`, `certifi`, `filelock`, `multidict`, `pillow` bumped; floors in `[tool.uv] constraint-dependencies`; `pip-audit --strict` on the exported lock reports no known vulnerabilities; `sca` job + Dependabot (pip, github-actions, weekly). |
-| RC-8 reader/actor | **in place, test-guarded** | `Builder.__init__` takes `Spec` (pydantic), not a path or text; `tests/security/test_builder_signature.py` asserts it and that the builder prompt is built from `spec.model_dump_json`. |
+| RC-8 reader/actor | **in place, test-guarded** | `Builder.__init__` takes `Spec` (pydantic), not a path or text; `tests/security/test_builder_signature.py` asserts it and that the builder prompt is built from `spec.model_dump_json`. All three paper-reading prompts (`EXTRACT_SYSTEM`, `REFEREE_SYSTEM`, `REREAD_SYSTEM`) carry the data-boundary directive, test-guarded. |
 
 Tests: `tests/security/test_sandbox_call.py` (round-trip, DataFrame args, concurrency, allow-listed env,
 banner, RSS watchdog, process-group timeout, backend resolution, container command shape),
 `test_no_inprocess_exec.py` (AST walk: no `exec_module`/`spec_from_file_location`/`exec`/`eval` in
 `replicator/`, no `sys.path` edits in the orchestrator), `test_builder_signature.py`, plus the
 existing env-scrub, fuzz and LLM01 tests. CI: `.github/workflows/security.yml` (security-tests,
-sast, sca — the private toolkit needs a `GH_PAT` secret to install).
+sast, sca — actions SHA-pinned; the private toolkit needs a `TOOLKIT_TOKEN` secret, and the jobs that depend on it fail closed when it is absent).
+
+**Accepted trade-off — `PYTHONPATH` is work dir + repo root, not work dir only.** Generated finance pipelines import the trusted data adapters (`replicator.data.adapters`), so the repo root is on the child's path in local mode. Consequence: generated code can drive adapter fetches (host-allow-listed, size-capped, cached under `data_cache/`) — it still cannot see credentials. In container mode (`--network none`) adapters cannot fetch at all: data must be pre-staged by the orchestrator (triage probes and the adapter cache under `data_cache/`, mounted read-only at `/app/data_cache`, where `CACHE_ROOT` resolves inside the image). Both modes are stated here so neither is a surprise.
 
 ## Remaining (tracked)
 
-1. **Container backend in daily use** — the `container` path is implemented and its command shape
-   is tested, but the image has not been built and exercised end to end on this machine. Until
-   `make sandbox-image` is run, the sandbox is `local` (announced in every run log) and network
-   egress from generated code is not restricted.
-2. `papers/batch/resnet/work/assemble.py` still uses `pickle.load` on an agent-produced artifact
+1. **Container backend in daily use** — the `container` path is implemented (command shape and
+   kill-by-name unit-tested with a stand-in), but the image has not been built and exercised end
+   to end on this machine. Until `make sandbox-image` is run, the sandbox is `local` (announced in
+   every run log) and network egress from generated code is not restricted.
+2. `papers/batch/resnet/work/assemble.py` (one-off, already-run, agent-produced) still uses
+   `pickle.load` on the CIFAR-10 *python* batches, which are pickled dicts — `np.frombuffer` would
+   need the *binary* distribution instead, i.e. a re-download, so it is left documented
    (DESIGN §3.3 component 7; `_runner.save_result/load_result` is the replacement format).
 3. Apply `harden_paper_text` if paper text is ever interpolated into a prompt as a
    string (it is not today).
@@ -124,8 +129,9 @@ hand below, not dismissed as LOW.
   **operator-supplied URL** with `follow_redirects=True` and **no host/scheme
   guard** — a thin SSRF surface, but the URL is a CLI argument the operator types,
   not attacker-reachable, and the response is parsed as text, not acted on.
-  **Verdict then: low** (operator-trust boundary). **Now fixed (RC-4):** both go through
-  `secprim.safe_fetch` — arXiv with a host allow-list, HTML with a body cap.
+  **Verdict then: low** (operator-trust boundary). **Now fixed (RC-4):** both, and the data
+  adapters (French library, HF Hub) that this pass had not listed, go through `secprim.safe_fetch`
+  with host allow-lists and body caps.
 
 ### The headline: running model-generated code
 
@@ -178,7 +184,8 @@ itself. This was a trust-the-model posture, acceptable only for an operator runn
 on their own machine.
 
 **Resolved by the root-cause fixes above (2026-11-26):** the finance path now runs in a
-subprocess through `Sandbox.call`; every exec path gets an allow-listed environment and a
+subprocess through `Sandbox.call` and the CS path through `Sandbox.run` — there is one process
+spawner in `replicator/`, test-enforced; every exec path gets an allow-listed environment and a
 throwaway HOME; memory is bounded by an RSS watchdog on every platform, CPU/process/file size by
 rlimits where supported; `run_python.path` is contained; the `container` backend removes network
 egress and makes the work dir the only writable mount when the image is present. What is not yet

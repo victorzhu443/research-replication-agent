@@ -81,9 +81,10 @@ TOOLS = [
 
 
 class Builder:
-    def __init__(self, llm: LLM, spec: Spec, workdir: Path, smoke_fn: Callable[[], dict[str, Any]], budget_minutes: int):
+    def __init__(self, llm: LLM, spec: Spec, workdir: Path, smoke_fn: Callable[[], dict[str, Any]], budget_minutes: int,
+                 sandbox: Sandbox | None = None):
         self.llm, self.spec, self.workdir, self.smoke_fn = llm, spec, workdir, smoke_fn
-        self.sandbox = Sandbox(workdir)
+        self.sandbox = sandbox or Sandbox(workdir)  # the orchestrator passes its own, so one log, one banner
         self.budget_s = budget_minutes * 60
         self.smoke_passed = False
         self.last_smoke: dict[str, Any] = {}

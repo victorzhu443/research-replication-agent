@@ -2,9 +2,11 @@
 # Build once from the lockfile:  make sandbox-image
 # The Sandbox then selects it automatically (REPLICATOR_SANDBOX_BACKEND=auto) and runs each call as
 #   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-#     --memory <mem> --pids-limit 64 --tmpfs /tmp -v <workdir>:/work:rw -v data_cache:/data_cache:ro \
+#     --memory <mem> --pids-limit 64 --tmpfs /tmp -v <workdir>:/work:rw -v data_cache:/app/data_cache:ro \
 #     -w /work --env-file <allow-listed env> replicator-sandbox:latest python ...
-# Generated code never needs the shared security toolkit, so the private dependency is excluded.
+# No network inside: the adapter cache is mounted read-only at /app/data_cache (where
+# replicator.data.cache.CACHE_ROOT resolves in the image), so data must be pre-staged by the
+# orchestrator before the run. Generated code never needs the security toolkit; it is excluded.
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir uv

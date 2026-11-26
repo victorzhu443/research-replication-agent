@@ -4,10 +4,11 @@ name: security
 #   sast            Semgrep: toolkit rules + p/python + p/secrets
 #   sca             pip-audit against the lockfile; fails on any known vulnerability
 #
-# The shared toolkit (security-agents) is a PRIVATE git dependency. Installing it in CI needs a
-# repository secret `GH_PAT` (a fine-grained token with read access to victorzhu443/security-agents).
-# Without it, `uv sync` cannot resolve the dependency and the security-tests / sast jobs fail at
-# install time — that is intentional: the design is "adopted" only when all three jobs run.
+# The shared toolkit (security-agents) is a PRIVATE git dependency. Installing it in CI needs the
+# repository secret `TOOLKIT_TOKEN` (a fine-grained token with read access to
+# victorzhu443/security-agents — the name the toolkit's reusable workflow declares). Without it the
+# security-tests and sast jobs fail, on purpose: the design counts as adopted only when all three
+# jobs run with the real rules. Every action is pinned to a commit SHA (RC-7).
 on:
   push:
   pull_request:
@@ -19,48 +20,47 @@ jobs:
   security-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262          # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86        # v5 (v5.4.2)
         with: { python-version: "3.12" }
       - name: Configure access to the private toolkit
-        env: { GH_PAT: "${{ secrets.GH_PAT }}" }
+        env: { TOOLKIT_TOKEN: "${{ secrets.TOOLKIT_TOKEN }}" }
         run: |
-          if [ -n "$GH_PAT" ]; then
-            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
-          else
-            echo "::warning::GH_PAT not set; the private security-agents dependency cannot be fetched"
+          if [ -z "$TOOLKIT_TOKEN" ]; then
+            echo "::error::TOOLKIT_TOKEN is not set; the private security-agents dependency cannot be installed"
+            exit 1
           fi
+          git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
       - run: uv sync --dev
-      - name: Security suite (sandbox boundary is forced local in CI; no docker image here)
+      - name: Security suite (sandbox backend forced local in CI; no docker image here)
         run: uv run python -m pytest tests/security/ -q
         env: { REPLICATOR_SANDBOX_BACKEND: local }
 
   sast:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262          # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065      # v5.6.0
         with: { python-version: "3.12" }
       - run: pip install semgrep
-      - name: Fetch the toolkit's rules (private; needs GH_PAT)
-        env: { GH_PAT: "${{ secrets.GH_PAT }}" }
+      - name: Fetch the toolkit's rules (private; needs TOOLKIT_TOKEN)
+        env: { TOOLKIT_TOKEN: "${{ secrets.TOOLKIT_TOKEN }}" }
         run: |
-          if [ -n "$GH_PAT" ]; then
-            git clone --depth 1 --branch v0.1.0 "https://x-access-token:${GH_PAT}@github.com/victorzhu443/security-agents" ../security-agents
-            echo "RULES=--config ../security-agents/semgrep/rules.yml" >> "$GITHUB_ENV"
-          else
-            echo "::warning::GH_PAT not set; running registry packs only"
+          if [ -z "$TOOLKIT_TOKEN" ]; then
+            echo "::error::TOOLKIT_TOKEN is not set; refusing to run SAST without the toolkit rules"
+            exit 1
           fi
+          git clone --depth 1 --branch v0.1.0 "https://x-access-token:${TOOLKIT_TOKEN}@github.com/victorzhu443/security-agents" ../security-agents
       - name: Semgrep (custom rules + python/secrets packs)
-        run: semgrep scan $RULES --config p/python --config p/secrets --error --metrics off --exclude .venv --exclude runs --exclude data_cache --exclude papers .
+        run: semgrep scan --config ../security-agents/semgrep/rules.yml --config p/python --config p/secrets --error --metrics off --exclude .venv --exclude runs --exclude data_cache --exclude papers .
 
   # RC-7: dependency audit from the lockfile. Accepted risks go in an ignore list with an expiry,
   # never silently. The private git dependency is not on PyPI and is skipped by name.
   sca:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262          # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86        # v5 (v5.4.2)
         with: { python-version: "3.12" }
       - run: pip install pip-audit
       - name: Export the lock as requirements (git dependency excluded)
