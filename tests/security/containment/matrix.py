@@ -45,10 +45,21 @@ from typing import Any, Callable
 
 import psutil
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+# Measure THIS tree's sandbox, not whichever copy happens to be installed on sys.path
+# (running this file by path from a worktree otherwise imports the main checkout's
+# module and fingerprints the wrong code).
+import sys as _sys
+if str(REPO_ROOT) not in _sys.path[:1]:
+    _sys.path.insert(0, str(REPO_ROOT))
+for _k in [k for k in _sys.modules if k == "replicator" or k.startswith("replicator.")]:
+    del _sys.modules[_k]
 from replicator.build import sandbox as sb_mod
+if not Path(sb_mod.__file__).resolve().is_relative_to(REPO_ROOT):
+    raise SystemExit(f"matrix.py imported sandbox from {sb_mod.__file__}, outside {REPO_ROOT}")
+
 from replicator.build.sandbox import DEFAULT_IMAGE, ExecResult, Sandbox
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 DEFAULT_OUT = REPO_ROOT / "security"
 SECURITY_MD = REPO_ROOT / "SECURITY.md"
