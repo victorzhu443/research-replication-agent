@@ -50,7 +50,7 @@ jobs:
             echo "::error::TOOLKIT_TOKEN is not set; refusing to run SAST without the toolkit rules"
             exit 1
           fi
-          git clone --depth 1 --branch v0.1.0 "https://x-access-token:${TOOLKIT_TOKEN}@github.com/victorzhu443/security-agents" ../security-agents
+          git clone --depth 1 --branch v0.1.1 "https://x-access-token:${TOOLKIT_TOKEN}@github.com/victorzhu443/security-agents" ../security-agents
       - name: Semgrep (custom rules + python/secrets packs)
         run: semgrep scan --config ../security-agents/semgrep/rules.yml --config p/python --config p/secrets --error --metrics off --exclude .venv --exclude runs --exclude data_cache --exclude papers .
 

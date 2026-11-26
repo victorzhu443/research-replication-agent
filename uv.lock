@@ -2427,7 +2427,7 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0" },
     { name = "sacrebleu", specifier = ">=2.6.0" },
     { name = "scipy", specifier = ">=1.18.1" },
-    { name = "security-agents", git = "https://github.com/victorzhu443/security-agents?rev=v0.1.0" },
+    { name = "security-agents", git = "https://github.com/victorzhu443/security-agents?rev=v0.1.1" },
     { name = "statsmodels", specifier = ">=0.15.0" },
     { name = "torch", specifier = ">=2.14.0" },
     { name = "torchvision", specifier = ">=0.29.0" },
@@ -2565,8 +2565,8 @@ wheels = [
 
 [[package]]
 name = "security-agents"
-version = "0.1.0"
-source = { git = "https://github.com/victorzhu443/security-agents?rev=v0.1.0#f34a73111c333520314cb2edd75639c6ece2e6ac" }
+version = "0.1.1"
+source = { git = "https://github.com/victorzhu443/security-agents?rev=v0.1.1#52eb708782abc3bb7fce6d14d439573dbfbf1753" }
 dependencies = [
     { name = "hypothesis" },
 ]

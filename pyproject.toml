@@ -67,5 +67,5 @@ constraint-dependencies = [
 # Shared security primitives (secprim, promptinject), pinned to a tag (DESIGN §2.1). The repo is
 # private: `uv sync` needs git credentials for github.com/victorzhu443. For local development,
 # `uv pip install -e ../security-agents` over the sibling checkout is equivalent.
-# bump to v0.1.1 once tagged (adds is_dev(); require_secret fails closed)
-security-agents = { git = "https://github.com/victorzhu443/security-agents", rev = "v0.1.0" }
+
+security-agents = { git = "https://github.com/victorzhu443/security-agents", rev = "v0.1.1" }
