@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
+from secprim import MalformedInput, contained_path
 
 from ..data.adapters import describe
 from ..llm import LLM
@@ -107,7 +108,11 @@ class Builder:
             p.write_text(inp["content"])
             return f"wrote {len(inp['content'])} chars to {inp['path']}"
         if name == "run_python":
-            r = self.sandbox.python_file(inp["path"], inp.get("args") or [], timeout_s=300, tag="builder")
+            try:
+                rel = str(contained_path(wd, inp["path"]).relative_to(wd))
+            except MalformedInput as e:
+                return f"error: {e}"
+            r = self.sandbox.python_file(rel, inp.get("args") or [], timeout_s=300, tag="builder")
             return f"rc={r.returncode} ({r.seconds:.1f}s)\n--- stdout ---\n{r.stdout[-6000:]}\n--- stderr ---\n{r.stderr[-6000:]}"
         if name == "run_smoke":
             res = self.smoke_fn()

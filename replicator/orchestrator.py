@@ -4,7 +4,6 @@ Owns budgets, the freeze, the stop, the run log, and the always-produced report.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -18,6 +17,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from . import __version__, report as report_mod
+from .build.sandbox import Sandbox
 from .data.adapters import ADAPTERS
 from .data import checkpoint as ckpt
 from .kb import family_kb
@@ -62,6 +62,7 @@ class Orchestrator:
         self.t0 = time.time()
         self.stages_done: list[str] = []
         self.llm: Optional[LLM] = None
+        self._sandbox: Optional[Sandbox] = None
         self.log_path = self.root / "orchestrator.log"
 
     # ------------------------------------------------------------------ utils
@@ -134,20 +135,23 @@ class Orchestrator:
         return info
 
     # ------------------------------------------------------------------ pipeline adapters
-    def _load_pipeline(self):
-        p = self.work / "pipeline.py"
-        if not p.exists():
+    @property
+    def sandbox(self) -> Sandbox:
+        """The one execution boundary for model-authored code. `pipeline.py` is never imported into
+        this process: every call crosses as JSON/parquet through `Sandbox.call`."""
+        if self._sandbox is None:
+            self._sandbox = Sandbox(self.work, logger=self.log)
+        return self._sandbox
+
+    def _require_pipeline(self) -> None:
+        if not (self.work / "pipeline.py").exists():
             raise RuntimeError("pipeline.py not found in work dir")
-        spec_ = importlib.util.spec_from_file_location("pipeline", p)
-        mod = importlib.util.module_from_spec(spec_)
-        sys.path.insert(0, str(self.work))
-        spec_.loader.exec_module(mod)  # type: ignore[union-attr]
-        return mod
 
     def run_fn_for(self, spec: Spec) -> Callable[[dict, int], dict]:
         if spec.paper.track.value == "finance":
-            mod = self._load_pipeline()
-            return lambda cfg, seed: mod.run(cfg, seed)
+            self._require_pipeline()
+            timeout = spec.plan.budget.run_timeout_s
+            return lambda cfg, seed: self.sandbox.call("pipeline", "run", {}, args=[cfg, seed], timeout_s=timeout)
         def _cs(cfg, seed):
             r = cs_eval.run_reproduce(self.work, cfg, seed, timeout_s=spec.plan.budget.run_timeout_s)
             return {**r["metrics"], "_shuffled": bool(r.get("shuffled")), "_shuffle_na": bool(r.get("shuffle_not_applicable")),
@@ -163,16 +167,19 @@ class Orchestrator:
         out: dict[str, Any] = {"passed": False, "problems": []}
         try:
             if spec.paper.track.value == "finance":
-                mod = self._load_pipeline()
+                self._require_pipeline()
+                timeout = min(600, spec.plan.budget.run_timeout_s)
+                present = self.sandbox.call("_runner", "has_fns", {"module": "pipeline", "fns": ["run", "raw_data", "build_features"]},
+                                            timeout_s=timeout)
                 for fn in ("run", "raw_data", "build_features"):
-                    if not hasattr(mod, fn):
+                    if not present.get(fn):
                         out["problems"].append(f"pipeline.py missing {fn}()")
                 if out["problems"]:
                     return out
                 if "years" in fam.get("smoke", {}) and spec.claims and spec.claims[0].sample_start:
                     y0 = int(str(spec.claims[0].sample_start)[:4])
                     cfg["sample_start"], cfg["sample_end"] = f"{y0}-01", f"{y0 + fam['smoke']['years']}-12"
-                metrics = mod.run(cfg, 0)
+                metrics = self.sandbox.call("pipeline", "run", {}, args=[cfg, 0], timeout_s=timeout)
                 out["metrics"] = {k: v for k, v in metrics.items() if not k.startswith("_")}
                 need = {c.metric for c in spec.claims if c.id in spec.plan.target_claims}
                 missing = [m for m in need if m not in metrics]
@@ -399,11 +406,14 @@ class Orchestrator:
             report.leakage.append(LeakageResult(test="shuffle", passed=None, detail="not applicable: the pipeline declares no label/reward to shuffle (declared in metrics.json)"))
         if not is_cs:
             try:
-                mod = self._load_pipeline()
-                raw = mod.raw_data()
-                report.leakage.append(leakage.future_perturbation_test(mod.build_features, raw))
-                if hasattr(mod, "pit_audit"):
-                    ok, n = mod.pit_audit()
+                self._require_pipeline()
+                timeout = spec.plan.budget.run_timeout_s
+                raw = self.sandbox.call("pipeline", "raw_data", {}, timeout_s=timeout)
+                build_features = lambda df: self.sandbox.call("pipeline", "build_features", {}, args=[df], timeout_s=timeout)  # noqa: E731
+                report.leakage.append(leakage.future_perturbation_test(build_features, raw))
+                present = self.sandbox.call("_runner", "has_fns", {"module": "pipeline", "fns": ["pit_audit"]}, timeout_s=timeout)
+                if present.get("pit_audit"):
+                    ok, n = self.sandbox.call("pipeline", "pit_audit", {}, timeout_s=timeout)
                     report.leakage.append(LeakageResult(test="available_at_audit", passed=ok, detail=f"{n} violations"))
                 else:
                     report.leakage.append(LeakageResult(test="available_at_audit", passed=None, detail="pipeline exposes no pit_audit()"))

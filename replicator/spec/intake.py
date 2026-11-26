@@ -5,15 +5,25 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import httpx
 import pymupdf
+from secprim.safe_fetch import safe_fetch
+
+MAX_PDF_BYTES = 64 * 1024 * 1024
+MAX_HTML_BYTES = 16 * 1024 * 1024
+
+
+def _checked(r, url: str):
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code} fetching {url}")
+    return r
 
 
 def fetch_arxiv(arxiv_id: str, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     url = f"https://arxiv.org/pdf/{arxiv_id}"
-    r = httpx.get(url, timeout=120, follow_redirects=True)
-    r.raise_for_status()
+    # Pinned, egress-validated fetch: resolves once, connects to the validated address, follows
+    # redirects hop by hop within the arxiv.org allow-list, and caps the body.
+    r = _checked(safe_fetch(url, allow_hosts=["arxiv.org"], max_bytes=MAX_PDF_BYTES, timeout=120), url)
     p = dest / f"{arxiv_id.replace('/', '_')}.pdf"
     p.write_bytes(r.content)
     return p
@@ -23,8 +33,7 @@ def fetch_html_as_text(url: str, dest: Path, name: str) -> Path:
     """HTML-only papers: strip tags to text; no page images, so claim re-reads are skipped."""
     import re as _re
     dest.mkdir(parents=True, exist_ok=True)
-    r = httpx.get(url, timeout=120, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
+    r = _checked(safe_fetch(url, max_bytes=MAX_HTML_BYTES, timeout=120, headers={"User-Agent": "Mozilla/5.0"}), url)
     html = r.text
     html = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=_re.S | _re.I)
     text = _re.sub(r"<[^>]+>", " ", html)

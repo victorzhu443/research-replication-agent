@@ -1,0 +1,21 @@
+# The image the `container` sandbox backend runs model-authored code in (DESIGN §3.3, component 2).
+# Build once from the lockfile:  make sandbox-image
+# The Sandbox then selects it automatically (REPLICATOR_SANDBOX_BACKEND=auto) and runs each call as
+#   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+#     --memory <mem> --pids-limit 64 --tmpfs /tmp -v <workdir>:/work:rw -v data_cache:/data_cache:ro \
+#     -w /work --env-file <allow-listed env> replicator-sandbox:latest python ...
+# Generated code never needs the shared security toolkit, so the private dependency is excluded.
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir uv
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-package security-agents > requirements.txt \
+ && pip install --no-cache-dir -r requirements.txt \
+ && rm requirements.txt
+COPY replicator /app/replicator
+
+RUN useradd --create-home --uid 10001 sandbox
+USER sandbox
+ENV PYTHONPATH=/work:/app PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0
+WORKDIR /work

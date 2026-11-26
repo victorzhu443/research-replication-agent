@@ -15,15 +15,16 @@ dependencies = [
     "pandas-datareader>=0.11.1",
     "pandera>=0.33.1",
     "peft>=0.21.0",
+    "psutil>=7.2.2",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
     "pymupdf>=1.28.2",
-    "pypdf>=6.18.1",
     "pytest>=9.1.1",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
     "sacrebleu>=2.6.0",
     "scipy>=1.18.1",
+    "security-agents",
     "statsmodels>=0.15.0",
     "torch>=2.14.0",
     "torchvision>=0.29.0",
@@ -42,5 +43,28 @@ replicate = "replicator.cli:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.17",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["replicator", "evals"]
+
+[tool.uv]
+# RC-7 floors: the lock must never resolve back to a version with a known CVE.
+constraint-dependencies = [
+    "urllib3>=2.8.0",
+    "setuptools>=84.1.0",
+    "aiohttp>=3.14.4",
+    "certifi>=2026.10.18",
+    "filelock>=4.2.1",
+    "multidict>=6.9.1",
+    "pillow>=13.0.0",
+]
+
+[tool.uv.sources]
+# Shared security primitives (secprim, promptinject), pinned to a tag (DESIGN §2.1). The repo is
+# private: `uv sync` needs git credentials for github.com/victorzhu443. For local development,
+# `uv pip install -e ../security-agents` over the sibling checkout is equivalent.
+security-agents = { git = "https://github.com/victorzhu443/security-agents", rev = "v0.1.0" }

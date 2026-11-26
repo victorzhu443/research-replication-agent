@@ -1,0 +1,69 @@
+name: security
+# Three enforcement jobs (DESIGN §2.3), shaped after security-agents/.github/workflows/ci.yml:
+#   security-tests  pytest tests/security/   (sandbox boundary, no in-process exec, fetch, LLM01, fuzz)
+#   sast            Semgrep: toolkit rules + p/python + p/secrets
+#   sca             pip-audit against the lockfile; fails on any known vulnerability
+#
+# The shared toolkit (security-agents) is a PRIVATE git dependency. Installing it in CI needs a
+# repository secret `GH_PAT` (a fine-grained token with read access to victorzhu443/security-agents).
+# Without it, `uv sync` cannot resolve the dependency and the security-tests / sast jobs fail at
+# install time — that is intentional: the design is "adopted" only when all three jobs run.
+on:
+  push:
+  pull_request:
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - name: Configure access to the private toolkit
+        env: { GH_PAT: "${{ secrets.GH_PAT }}" }
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "::warning::GH_PAT not set; the private security-agents dependency cannot be fetched"
+          fi
+      - run: uv sync --dev
+      - name: Security suite (sandbox boundary is forced local in CI; no docker image here)
+        run: uv run python -m pytest tests/security/ -q
+        env: { REPLICATOR_SANDBOX_BACKEND: local }
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install semgrep
+      - name: Fetch the toolkit's rules (private; needs GH_PAT)
+        env: { GH_PAT: "${{ secrets.GH_PAT }}" }
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git clone --depth 1 --branch v0.1.0 "https://x-access-token:${GH_PAT}@github.com/victorzhu443/security-agents" ../security-agents
+            echo "RULES=--config ../security-agents/semgrep/rules.yml" >> "$GITHUB_ENV"
+          else
+            echo "::warning::GH_PAT not set; running registry packs only"
+          fi
+      - name: Semgrep (custom rules + python/secrets packs)
+        run: semgrep scan $RULES --config p/python --config p/secrets --error --metrics off --exclude .venv --exclude runs --exclude data_cache --exclude papers .
+
+  # RC-7: dependency audit from the lockfile. Accepted risks go in an ignore list with an expiry,
+  # never silently. The private git dependency is not on PyPI and is skipped by name.
+  sca:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - run: pip install pip-audit
+      - name: Export the lock as requirements (git dependency excluded)
+        run: uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-package security-agents > requirements-lock.txt
+      - name: pip-audit (lockfile)
+        run: pip-audit --strict --progress-spinner off --no-deps -r requirements-lock.txt

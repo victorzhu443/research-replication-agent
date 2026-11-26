@@ -17,24 +17,34 @@ from typing import Any
 import numpy as np
 
 
+_HOME: Path | None = None
+
+
+def _sandbox_home() -> Path:
+    """One throwaway HOME per orchestrator process for reproduce.sh (caches are pinned to data_cache/)."""
+    global _HOME
+    if _HOME is None:
+        import tempfile
+        _HOME = Path(tempfile.mkdtemp(prefix="replicator-home-"))
+    return _HOME
+
+
 def run_reproduce(workdir: Path, config: dict[str, Any], seed: int, timeout_s: int = 1800,
                   python: str | None = None) -> dict[str, Any]:
-    env = {**os.environ, "SEED": str(seed), "REPLICATOR_CONFIG": json.dumps(config),
-           "SMOKE": "1" if config.get("_smoke") else "0", "RUN_TIMEOUT_S": str(timeout_s),
-           "SCALE": str(config.get("_scale", 1.0)),
-           "HF_HOME": os.environ.get("HF_HOME", str(Path(__file__).resolve().parents[2] / "data_cache" / "hf")),
-           "TOKENIZERS_PARALLELISM": "false"}
-    if python:
-        env["PYTHON"] = python
-    # Model-authored reproduce.sh never needs the orchestrator's LLM credentials; drop them so a
-    # generated script cannot read and exfiltrate the Anthropic key (see sandbox.scrub_secrets).
-    from ..build.sandbox import scrub_secrets
-    env = scrub_secrets(env)
     workdir = workdir.resolve()
     out = workdir / f"metrics_seed{seed}.json"
     if out.exists():
         out.unlink()
-    env["METRICS_OUT"] = str(out)
+    # Model-authored reproduce.sh gets an allow-listed environment (sandbox.sandbox_env): the
+    # per-run values below plus PATH/locale/cache locations, never the parent's credentials.
+    from ..build.sandbox import sandbox_env
+    extra = {"SEED": str(seed), "REPLICATOR_CONFIG": json.dumps(config),
+             "SMOKE": "1" if config.get("_smoke") else "0", "RUN_TIMEOUT_S": str(timeout_s),
+             "SCALE": str(config.get("_scale", 1.0)), "TOKENIZERS_PARALLELISM": "false",
+             "METRICS_OUT": str(out)}
+    if python:
+        extra["PYTHON"] = python
+    env = sandbox_env(workdir, extra, home=_sandbox_home())
     # Run in its own process group so a timeout kills the training script and any workers it
     # spawned, not just the bash wrapper (a surviving grandchild holding the pipe hangs the parent).
     import signal
