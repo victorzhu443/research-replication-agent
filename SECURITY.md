@@ -74,7 +74,7 @@ banner, RSS watchdog, process-group timeout, backend resolution, container comma
 `test_no_inprocess_exec.py` (AST walk: no `exec_module`/`spec_from_file_location`/`exec`/`eval` in
 `replicator/`, no `sys.path` edits in the orchestrator), `test_builder_signature.py`, plus the
 existing env-scrub, fuzz and LLM01 tests. CI: `.github/workflows/security.yml` (security-tests,
-sast, sca — actions SHA-pinned; the private toolkit needs a `TOOLKIT_TOKEN` secret, and the jobs that depend on it fail closed when it is absent).
+sast, sca — actions SHA-pinned; the toolkit repo is public, so the jobs run anonymously; an optional read-only `TOOLKIT_TOKEN` secret is honored if set and only needed if the repo is ever made private again).
 
 **Accepted trade-off — `PYTHONPATH` is work dir + repo root, not work dir only.** Generated finance pipelines import the trusted data adapters (`replicator.data.adapters`), so the repo root is on the child's path in local mode. Consequence: generated code can drive adapter fetches (host-allow-listed, size-capped, cached under `data_cache/`) — it still cannot see credentials. In container mode (`--network none`) adapters cannot fetch at all: data must be pre-staged by the orchestrator (triage probes and the adapter cache under `data_cache/`, mounted read-only at `/app/data_cache`, where `CACHE_ROOT` resolves inside the image). Both modes are stated here so neither is a surprise.
 

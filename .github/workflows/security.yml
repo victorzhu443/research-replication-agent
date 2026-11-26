@@ -4,11 +4,10 @@ name: security
 #   sast            Semgrep: toolkit rules + p/python + p/secrets
 #   sca             pip-audit against the lockfile; fails on any known vulnerability
 #
-# The shared toolkit (security-agents) is a PRIVATE git dependency. Installing it in CI needs the
-# repository secret `TOOLKIT_TOKEN` (a fine-grained token with read access to
-# victorzhu443/security-agents — the name the toolkit's reusable workflow declares). Without it the
-# security-tests and sast jobs fail, on purpose: the design counts as adopted only when all three
-# jobs run with the real rules. Every action is pinned to a commit SHA (RC-7).
+# The shared toolkit (security-agents) is a public git dependency, so the jobs run anonymously.
+# The optional repository secret `TOOLKIT_TOKEN` (a read-only token; the name the toolkit's
+# reusable workflow declares) is honored when set and is only needed if the toolkit repo is ever
+# made private again. Every action is pinned to a commit SHA (RC-7).
 on:
   push:
   pull_request:
@@ -23,14 +22,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262          # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86        # v5 (v5.4.2)
         with: { python-version: "3.12" }
-      - name: Configure access to the private toolkit
+      - name: Use TOOLKIT_TOKEN for github.com if it is set (public repo, anonymous otherwise)
         env: { TOOLKIT_TOKEN: "${{ secrets.TOOLKIT_TOKEN }}" }
         run: |
-          if [ -z "$TOOLKIT_TOKEN" ]; then
-            echo "::error::TOOLKIT_TOKEN is not set; the private security-agents dependency cannot be installed"
-            exit 1
+          if [ -n "$TOOLKIT_TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "TOOLKIT_TOKEN not set; fetching the public toolkit anonymously"
           fi
-          git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
       - run: uv sync --dev
       - name: Security suite (sandbox backend forced local in CI; no docker image here)
         run: uv run python -m pytest tests/security/ -q
@@ -43,19 +42,18 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065      # v5.6.0
         with: { python-version: "3.12" }
       - run: pip install semgrep
-      - name: Fetch the toolkit's rules (private; needs TOOLKIT_TOKEN)
+      - name: Fetch the toolkit's rules (public; TOOLKIT_TOKEN used only if set)
         env: { TOOLKIT_TOKEN: "${{ secrets.TOOLKIT_TOKEN }}" }
         run: |
-          if [ -z "$TOOLKIT_TOKEN" ]; then
-            echo "::error::TOOLKIT_TOKEN is not set; refusing to run SAST without the toolkit rules"
-            exit 1
+          if [ -n "$TOOLKIT_TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          git clone --depth 1 --branch v0.1.1 "https://x-access-token:${TOOLKIT_TOKEN}@github.com/victorzhu443/security-agents" ../security-agents
+          git clone --depth 1 --branch v0.1.1 https://github.com/victorzhu443/security-agents ../security-agents
       - name: Semgrep (custom rules + python/secrets packs)
         run: semgrep scan --config ../security-agents/semgrep/rules.yml --config p/python --config p/secrets --error --metrics off --exclude .venv --exclude runs --exclude data_cache --exclude papers .
 
   # RC-7: dependency audit from the lockfile. Accepted risks go in an ignore list with an expiry,
-  # never silently. The private git dependency is not on PyPI and is skipped by name.
+  # never silently. The toolkit git dependency is not on PyPI and is skipped by name.
   sca:
     runs-on: ubuntu-latest
     steps:
