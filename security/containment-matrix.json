@@ -151,11 +151,11 @@
   "runs": {
     "local": {
       "mode": "local",
-      "ran_at": "2026-11-26T16:48:22+00:00",
+      "ran_at": "2026-11-26T18:30:19+00:00",
       "host": "macOS-26.6.2-arm64-arm-64bit (arm64)",
       "python": "3.12.14",
-      "sandbox_commit": "e4590d1c54a0",
-      "sandbox_sha256": "6ad060b1faf83ce9abcad00210186dd86739c17de4e37619aa1515a4da3b4be1",
+      "sandbox_commit": "46b934e520f9",
+      "sandbox_sha256": "15f3cd5ee2f87610ca9ecf6060e5e8f7899130e835fcbe4c0f2245c3c6413dcd",
       "banner": "sandbox backend=local: network is NOT restricted",
       "backend_detail": "subprocess, python /Users/vzhu/Developer/projects/research-replication-agent/.venv/bin/python",
       "workdir_root": "/var/folders/x4/srj78fr145x2j4yv16tn91v40000gn/T",
@@ -178,7 +178,7 @@
           "outcome": "blocked",
           "claim": "blocked",
           "enforced_by": "cwd pinned to the work dir",
-          "detail": "relative write landed at box/work/escaped-canary-674793e522c6.txt",
+          "detail": "relative write landed at box/work/escaped-canary-7b20812db951.txt",
           "rc": 0,
           "seconds": 0.03
         },
@@ -235,7 +235,7 @@
           "enforced_by": "RLIMIT_AS where it is live (Linux); the RSS watchdog kills the process group where RLIMIT_AS is advisory (macOS)",
           "detail": "300 MiB under a 61 MiB limit: the RSS watchdog killed the process group (rc 137), 0.3s after start",
           "rc": 137,
-          "seconds": 0.29
+          "seconds": 0.27
         },
         "fsize": {
           "probe": "fsize",
@@ -257,7 +257,7 @@
           "enforced_by": "wall clock kills the whole process group",
           "detail": "child and grandchild gone 2.0s after start (rc 124)",
           "rc": 124,
-          "seconds": 2.01
+          "seconds": 2.0
         }
       }
     }

@@ -108,7 +108,7 @@ The block below is generated; every status word in it is copied from a cell.
 | `fsize`: write a 4 MiB file under a 1 MiB limit | PASS | not run |
 | `timeout`: spawn a grandchild and sleep past a 2s wall clock | PASS | not run |
 
-- `local`: measured 2026-11-26T16:48:22+00:00 on macOS-26.6.2-arm64-arm-64bit (arm64), python 3.12.14, sandbox e4590d1c54a0
+- `local`: measured 2026-11-26T18:30:19+00:00 on macOS-26.6.2-arm64-arm-64bit (arm64), python 3.12.14, sandbox 46b934e520f9
 - `container`: not run on any machine yet
 <!-- containment-matrix:end -->
 
