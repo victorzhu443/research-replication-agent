@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
+from secprim import MalformedInput, contained_path
 
 from ..data.adapters import describe
 from ..llm import LLM
@@ -80,9 +81,10 @@ TOOLS = [
 
 
 class Builder:
-    def __init__(self, llm: LLM, spec: Spec, workdir: Path, smoke_fn: Callable[[], dict[str, Any]], budget_minutes: int):
+    def __init__(self, llm: LLM, spec: Spec, workdir: Path, smoke_fn: Callable[[], dict[str, Any]], budget_minutes: int,
+                 sandbox: Sandbox | None = None):
         self.llm, self.spec, self.workdir, self.smoke_fn = llm, spec, workdir, smoke_fn
-        self.sandbox = Sandbox(workdir)
+        self.sandbox = sandbox or Sandbox(workdir)  # the orchestrator passes its own, so one log, one banner
         self.budget_s = budget_minutes * 60
         self.smoke_passed = False
         self.last_smoke: dict[str, Any] = {}
@@ -107,7 +109,11 @@ class Builder:
             p.write_text(inp["content"])
             return f"wrote {len(inp['content'])} chars to {inp['path']}"
         if name == "run_python":
-            r = self.sandbox.python_file(inp["path"], inp.get("args") or [], timeout_s=300, tag="builder")
+            try:
+                rel = str(contained_path(wd, inp["path"]).relative_to(wd))
+            except MalformedInput as e:
+                return f"error: {e}"
+            r = self.sandbox.python_file(rel, inp.get("args") or [], timeout_s=300, tag="builder")
             return f"rc={r.returncode} ({r.seconds:.1f}s)\n--- stdout ---\n{r.stdout[-6000:]}\n--- stderr ---\n{r.stderr[-6000:]}"
         if name == "run_smoke":
             res = self.smoke_fn()

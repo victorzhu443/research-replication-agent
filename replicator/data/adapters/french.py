@@ -5,8 +5,10 @@ from __future__ import annotations
 import io
 import zipfile
 
-import httpx
 import pandas as pd
+from secprim import MalformedInput
+from secprim.bounded import safe_zip_members
+from secprim.safe_fetch import safe_fetch
 
 from ..cache import cached_fetch
 from ..schemas import Factors, PortfolioReturns
@@ -33,19 +35,30 @@ FILES = {
 }
 
 
+HOSTS = ["mba.tuck.dartmouth.edu"]
+MAX_ZIP_BYTES = 50_000_000          # the largest library zip is a few MB
+MAX_MEMBER_BYTES = 200_000_000      # uncompressed CSV budget
+MAX_PROBE_BYTES = 2_000_000
+
+
 def probe() -> tuple[bool, str]:
     try:
-        r = httpx.head(BASE + FILES["ff3"], timeout=15, follow_redirects=True)
+        r = safe_fetch(BASE + FILES["ff3"], allow_hosts=HOSTS, max_bytes=MAX_PROBE_BYTES, timeout=15)
         return r.status_code == 200, f"HTTP {r.status_code}"
     except Exception as e:  # noqa: BLE001
         return False, str(e)
 
 
 def _download(name: str) -> str:
-    r = httpx.get(BASE + FILES[name], timeout=60, follow_redirects=True)
-    r.raise_for_status()
+    # Pinned, host-allow-listed, size-capped fetch; the zip is budgeted before any member is read.
+    r = safe_fetch(BASE + FILES[name], allow_hosts=HOSTS, max_bytes=MAX_ZIP_BYTES, timeout=60)
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code} fetching {FILES[name]}")
     z = zipfile.ZipFile(io.BytesIO(r.content))
-    return z.read(z.namelist()[0]).decode("latin-1")
+    members = list(safe_zip_members(z, max_member_bytes=MAX_MEMBER_BYTES, max_total_bytes=MAX_MEMBER_BYTES))
+    if not members:
+        raise MalformedInput(f"{FILES[name]}: empty archive")
+    return z.read(members[0]).decode("latin-1")
 
 
 def _parse_block(text: str, block_index: int, monthly: bool = True) -> pd.DataFrame:
@@ -69,7 +82,11 @@ def _parse_block(text: str, block_index: int, monthly: bool = True) -> pd.DataFr
         if rows:
             hdr = next((ln for ln in b if ln.startswith(",")), None)
             data_blocks.append((hdr, rows, b[0]))
+    if not data_blocks or block_index >= len(data_blocks):
+        raise ValueError(f"French file has {len(data_blocks)} data blocks; block {block_index} requested")
     hdr, rows, title = data_blocks[block_index]
+    if hdr is None:
+        raise ValueError("French data block has no header line")
     cols = ["date"] + [c.strip() for c in hdr.split(",")[1:]]
     df = pd.read_csv(io.StringIO("\n".join(rows)), header=None, names=cols)
     df = df[df["date"].astype(str).str.len() == (6 if monthly else 4)]

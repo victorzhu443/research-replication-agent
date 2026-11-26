@@ -2,10 +2,15 @@
 dataset-info when available. Examples never reach a prompt. Downloads happen in reproduce.sh."""
 from __future__ import annotations
 
-import httpx
+import json
+from urllib.parse import urlencode
+
 import pandas as pd
+from secprim.safe_fetch import safe_fetch
 
 HUB = "https://huggingface.co/api/datasets/"
+HOSTS = ["huggingface.co"]
+MAX_API_BYTES = 5_000_000  # a dataset card with its info block is a few hundred KB at most
 
 # canonical spec names -> Hub repo ids (grown by hand; the KB, not the model, owns this)
 CANONICAL = {
@@ -40,7 +45,7 @@ def resolve_model(canonical: str) -> str | None:
 
 def probe_model(repo: str) -> tuple[bool, str]:
     try:
-        r = httpx.get("https://huggingface.co/api/models/" + repo, timeout=20, follow_redirects=True)
+        r = safe_fetch("https://huggingface.co/api/models/" + repo, allow_hosts=HOSTS, max_bytes=MAX_API_BYTES, timeout=20)
         return r.status_code == 200, f"HTTP {r.status_code} model {repo}"
     except Exception as e:  # noqa: BLE001
         return False, str(e)
@@ -56,9 +61,9 @@ def resolve(canonical: str) -> str | None:
 
 def probe(repo: str = "wmt/wmt14") -> tuple[bool, str]:
     try:
-        r = httpx.get(HUB + repo, timeout=20, follow_redirects=True)
+        r = safe_fetch(HUB + repo, allow_hosts=HOSTS, max_bytes=MAX_API_BYTES, timeout=20)
         if r.status_code == 200:
-            j = r.json()
+            j = _as_object(r.content)
             gated = j.get("gated", False)
             return (not gated), f"HTTP 200 {repo}" + (" (gated: needs HF token)" if gated else "")
         return False, f"HTTP {r.status_code} {repo}"
@@ -66,13 +71,39 @@ def probe(repo: str = "wmt/wmt14") -> tuple[bool, str]:
         return False, str(e)
 
 
+def _as_object(payload: bytes | str) -> dict:
+    """Hub JSON must be an object; anything else is a declared ValueError."""
+    j = json.loads(payload)
+    if not isinstance(j, dict):
+        raise ValueError("Hub response is not a JSON object")
+    return j
+
+
+def parse_dataset_info(payload: bytes | str) -> tuple[pd.DataFrame, str]:
+    """Split sizes from a Hub dataset-info payload. Untrusted input: every shape is checked,
+    and a malformed payload is a ValueError, never a crash."""
+    j = _as_object(payload)
+    card = j.get("cardData")
+    infos = card.get("dataset_info") if isinstance(card, dict) else None
+    if isinstance(infos, dict):
+        infos = [infos]
+    rows = []
+    for cfg in infos if isinstance(infos, list) else []:
+        if not isinstance(cfg, dict):
+            continue
+        splits = cfg.get("splits")
+        for sp in splits if isinstance(splits, list) else []:
+            if isinstance(sp, dict):
+                rows.append({"config": cfg.get("config_name"), "split": sp.get("name"), "n_examples": sp.get("num_examples")})
+    sha = j.get("sha")
+    sha = sha[:12] if isinstance(sha, str) else ""
+    return pd.DataFrame(rows or [{"config": None, "split": None, "n_examples": None}]), sha
+
+
 def fetch(params: dict) -> tuple[pd.DataFrame, str]:
     repo = params["repo"]
-    r = httpx.get(HUB + repo, params={"expand[]": "cardData"}, timeout=30, follow_redirects=True)
-    r.raise_for_status()
-    j = r.json()
-    rows = []
-    for cfg in (j.get("cardData") or {}).get("dataset_info", []) or []:
-        for sp in cfg.get("splits", []) or []:
-            rows.append({"config": cfg.get("config_name"), "split": sp.get("name"), "n_examples": sp.get("num_examples")})
-    return pd.DataFrame(rows or [{"config": None, "split": None, "n_examples": None}]), f"hf:{repo}:{j.get('sha', '')[:12]}"
+    r = safe_fetch(HUB + repo + "?" + urlencode({"expand[]": "cardData"}), allow_hosts=HOSTS, max_bytes=MAX_API_BYTES, timeout=30)
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code} fetching dataset info for {repo}")
+    df, sha = parse_dataset_info(r.content)
+    return df, f"hf:{repo}:{sha}"

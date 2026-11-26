@@ -45,11 +45,11 @@ def test_control_document_is_not_flagged():
 def test_paper_reading_prompts_state_the_data_boundary():
     # The real defense for this app is a system-prompt directive telling the model
     # that the paper (passed as a document block) is data, not instructions. The
-    # two paper-reading prompts must carry it, or a hostile paper could steer the
+    # three paper-reading prompts (extract, referee, page re-read) must carry it, or a hostile paper could steer the
     # extraction/verdict.
-    from replicator.spec.extract import EXTRACT_SYSTEM, REFEREE_SYSTEM
+    from replicator.spec.extract import EXTRACT_SYSTEM, REFEREE_SYSTEM, REREAD_SYSTEM
 
-    for prompt in (EXTRACT_SYSTEM, REFEREE_SYSTEM):
+    for prompt in (EXTRACT_SYSTEM, REFEREE_SYSTEM, REREAD_SYSTEM):
         low = prompt.lower()
         assert "untrusted" in low or "not a source of instructions" in low \
             or "never a source of instructions" in low, \
