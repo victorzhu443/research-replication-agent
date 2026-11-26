@@ -146,6 +146,7 @@ def test_container_command_shape(monkeypatch, tmp_path):
     for flag in ("--rm", "--name sandbox-abc", "--network none", "--read-only", "--cap-drop ALL",
                  "--security-opt no-new-privileges", "--memory 2048m", "--pids-limit 64", "--tmpfs /tmp", "-w /work",
                  f"--ulimit fsize={sb.max_file_bytes}:{sb.max_file_bytes}", "--ulimit cpu=300:330",
+                 f"--user {os.getuid()}:{os.getgid()}",  # the work dir is a host dir owned by this uid
                  "--env-file", "/app/data_cache:ro"):
         assert flag in joined, flag
     assert f"{(tmp_path / 'w').resolve()}:/work:rw" in argv

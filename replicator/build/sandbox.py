@@ -233,7 +233,10 @@ class Sandbox:
         adapter cache (`data_cache/`, pre-staged by the orchestrator outside the sandbox) is mounted
         read-only at the path `replicator.data.cache.CACHE_ROOT` resolves to inside the image.
         Memory is bounded by `--memory` (cgroup), not the RSS watchdog, in this mode; processes by
-        `--pids-limit`; file size and CPU by the same rlimits local mode sets, passed as `--ulimit`."""
+        `--pids-limit`; file size and CPU by the same rlimits local mode sets, passed as `--ulimit`.
+        The process runs as the host uid:gid (`--user`), not the image's `sandbox` user: the work dir
+        is a host directory owned by the orchestrator's user, and on a Linux host a different uid in
+        the container cannot write it (the containment matrix's preflight caught exactly that)."""
         env = {**env, "PYTHONPATH": "/work:/app", "HOME": "/tmp",
                "HF_HOME": "/app/data_cache/hf", "TORCH_HOME": "/app/data_cache/torch"}
         env_file = self.home / f"env-{name}.list"
@@ -244,6 +247,7 @@ class Sandbox:
             ulimits += ["--ulimit", f"cpu={int(cpu_s)}:{int(cpu_s) + 30}"]
         return ["docker", "run", "--rm", "--name", name, "--network", "bridge" if self.network else "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--user", f"{os.getuid()}:{os.getgid()}",
                 "--memory", f"{max(1, self.mem_bytes // (1024 ** 2))}m", "--pids-limit", "64", *ulimits,
                 "--tmpfs", "/tmp", "-v", f"{self.workdir.resolve()}:/work:rw",
                 "-v", f"{DATA_CACHE}:/app/data_cache:ro", "-w", "/work",

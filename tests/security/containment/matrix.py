@@ -225,8 +225,8 @@ class _Ctx:
         if r.returncode != 0 or not ok.exists():
             raise RuntimeError(
                 f"{self.mode}: the sandbox cannot run a program that writes to its own work dir (rc={r.returncode}): "
-                f"{r.stderr[-300:]!r}. In container mode this usually means {self.workdir} is not bind-mountable; "
-                f"pass --tmp a directory the docker VM shares.")
+                f"{r.stderr[-300:]!r}. In container mode this means {self.workdir} is not bind-mountable (pass --tmp "
+                f"a directory the docker VM shares) or the container's user cannot write a host-owned directory.")
         ok.unlink()
         if self.mode == "local":
             return sb.banner, f"subprocess, python {sys.executable}"
