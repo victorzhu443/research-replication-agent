@@ -1,0 +1,15 @@
+# Stand-in image for the `container` column of the containment matrix on a CI runner, where the real
+# replicator-sandbox image (torch, transformers, the CUDA wheels in the lockfile) is too large to build.
+# The probes need only an interpreter and coreutils' `sleep`; what the matrix measures is the Sandbox's
+# own `docker run` flags (--network none, --read-only, --cap-drop ALL, --memory, --pids-limit, --ulimit),
+# which do not depend on the image. Same user and environment as Dockerfile.sandbox. On a machine where
+# `make sandbox-image` has been run the matrix uses the real image; the provenance block names which.
+#
+#   docker build -f tests/security/containment/Dockerfile.probe -t replicator-sandbox:probe .
+#   REPLICATOR_SANDBOX_IMAGE=replicator-sandbox:probe python -m tests.security.containment.matrix
+FROM python:3.12-slim
+
+RUN useradd --create-home --uid 10001 sandbox
+USER sandbox
+ENV PYTHONPATH=/work:/app PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0
+WORKDIR /work

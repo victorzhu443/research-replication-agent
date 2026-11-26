@@ -13,7 +13,7 @@ text. Tooling and tests live under `tests/security/`; the shared toolkit is
 |---|---|---|---|
 | replication verdict | paper content → `extract_spec` / `referee_spec` | a paper that addresses the model could steer extraction ("report a Match") | mitigated by data-boundary directive (below) |
 | build/run actions | paper content → builder prompts | coerced tool call (LLM01 / excessive agency) | reader/actor split in place: the Builder takes the validated `Spec`, never paper text (test-guarded); generated code is contained by the sandbox below |
-| generated code | model-authored `pipeline.py` / `reproduce.sh` / `run_python` | arbitrary code with the orchestrator's authority | **FIXED (RC-3)** — one execution boundary (`Sandbox`): subprocess + allow-listed env + RSS/CPU/file limits + wall clock; container backend when the image exists |
+| generated code | model-authored `pipeline.py` / `reproduce.sh` / `run_python` | arbitrary code with the orchestrator's authority | **FIXED (RC-3)** — one execution boundary (`Sandbox`): subprocess + allow-listed env + RSS/CPU/file limits + wall clock; container backend when the image exists. Each limit is measured per mode in the containment matrix (*Containment (P3)* below) |
 | operator URLs | `fetch_arxiv`, `fetch_html_as_text` | egress to an unintended address (SSRF class) | **FIXED (RC-4)** — `secprim.safe_fetch`: pinned, egress-validated, host allow-list for arXiv, body cap |
 | credentials | parent process env → generated code | leak by omission | **FIXED (RC-5)** — env built from an allow-list, not inherited-minus-denylist |
 | dependencies | PyPI | known CVEs in the lockfile | **FIXED (RC-7)** — `pypdf` removed (unused), `urllib3`/`setuptools`/transitives bumped, floors pinned, `sca` job in CI |
@@ -62,7 +62,7 @@ Each item is one line on *how*; the design holds the reasoning.
 
 | RC | Status | How |
 |---|---|---|
-| RC-3 sandbox | **FIXED** | `replicator/build/sandbox.py` is the single execution boundary. `_load_pipeline` (in-process `exec_module`) is deleted; the finance `run`, `raw_data`, `build_features`, `pit_audit` and the smoke attribute check go through `Sandbox.call`, a file-based RPC (`_runner.py`: JSON + parquet, per-call files, nothing live crosses). `cs_eval.run_reproduce` runs `bash reproduce.sh` through `Sandbox.run` (not a second `Popen`), the Builder receives the orchestrator's Sandbox, and `run_python.path` is checked with `contained_path`; an AST test forbids `subprocess` anywhere in `replicator/` except `build/sandbox.py` (and the orchestrator's own `uv lock --check`, allow-listed by its literal argv). Limits: `RLIMIT_CPU/NPROC/FSIZE/AS` where supported, plus an RSS watchdog (psutil) that kills the process group over `mem_gb`. `RLIMIT_AS` is live on Linux (an over-limit allocation fails with `MemoryError` before the watchdog fires — CI confirmed); the RSS watchdog is the macOS fallback, where `RLIMIT_AS` is advisory. The test accepts either path and fails if the child runs to completion or exits 0. Backend `auto` runs `docker run --network none --read-only --cap-drop ALL …` when `replicator-sandbox:latest` exists (`make sandbox-image`), else `local` with the banner `sandbox backend=local: network is NOT restricted` written to `orchestrator.log` at `stage_setup` on every run (any track, prebuilt or not); `sandbox_log.jsonl` sits in the run root, outside the model-writable work dir. Container mode: each call is `--name sandbox-<id>` and a timeout runs `docker kill <name>` (killing only the client would leave the container running); memory there is bounded by `--memory`, the RSS watchdog is the local-mode equivalent. **The container path is untested end to end on this machine** (command shape and kill-by-name are unit-tested with a stand-in). `REPLICATOR_SANDBOX_BACKEND=local|container` is the rollback flag. `BLACKLIST` → `PROVENANCE_MONITOR` (alias kept). |
+| RC-3 sandbox | **FIXED** | `replicator/build/sandbox.py` is the single execution boundary. `_load_pipeline` (in-process `exec_module`) is deleted; the finance `run`, `raw_data`, `build_features`, `pit_audit` and the smoke attribute check go through `Sandbox.call`, a file-based RPC (`_runner.py`: JSON + parquet, per-call files, nothing live crosses). `cs_eval.run_reproduce` runs `bash reproduce.sh` through `Sandbox.run` (not a second `Popen`), the Builder receives the orchestrator's Sandbox, and `run_python.path` is checked with `contained_path`; an AST test forbids `subprocess` anywhere in `replicator/` except `build/sandbox.py` (and the orchestrator's own `uv lock --check`, allow-listed by its literal argv). Limits in `local` mode: `RLIMIT_CPU/NPROC/FSIZE/AS` where supported, plus an RSS watchdog (psutil) that kills the process group over `mem_gb`. In `container` mode (`auto` picks it when `replicator-sandbox:latest` exists, `make sandbox-image`): `docker run --network none --read-only --cap-drop ALL --security-opt no-new-privileges --memory … --pids-limit 64 --ulimit fsize=… --ulimit cpu=…`, each call `--name sandbox-<id>` so a timeout can `docker kill` it by name (killing only the client would leave the container running). **Which limit holds in which mode, on which platform, is measured, not stated here: see *Containment (P3)* below.** `local` announces itself with the banner `sandbox backend=local: network is NOT restricted` in `orchestrator.log` at `stage_setup` on every run (any track, prebuilt or not); `sandbox_log.jsonl` sits in the run root, outside the model-writable work dir. `REPLICATOR_SANDBOX_BACKEND=local|container` is the rollback flag. `BLACKLIST` → `PROVENANCE_MONITOR` (alias kept). |
 | RC-4 fetch | **FIXED** | Every outbound fetch in `replicator/` goes through `secprim.safe_fetch` (resolve once, connect to the validated address, hop-by-hop redirects, bounded body): `spec/intake.py` `fetch_arxiv` (`allow_hosts=["arxiv.org"]`, 64 MB) and `fetch_html_as_text` (2 MB); `data/adapters/french.py` `probe`/`_download` (`allow_hosts=["mba.tuck.dartmouth.edu"]`, 50 MB, and the zip is budgeted with `safe_zip_members` before any member is read); `data/adapters/hf_datasets.py` `probe`/`probe_model`/`fetch` (`allow_hosts=["huggingface.co"]`, 5 MB, `json.loads` on the capped body). `httpx` is no longer imported anywhere in `replicator/`. |
 | RC-2 parsers | **FIXED** | `intake.html_to_text` strips tags in linear time (`<[^<>]+>` plus a single forward scan for script/style blocks; the previous `.*?</\1>` and `<[^>]+>` patterns were quadratic on hostile markup). `redos_probe` over every pattern and `size_sweep` over the whole function are in `tests/security/`; `html_to_text`, `french._parse_block` and `hf_datasets.parse_dataset_info` are registered with `assert_robust`. |
 | RC-5 secrets | **FIXED** | `sandbox_env()` = `secprim.child_env` over an explicit allow-list (PATH, locale, cache dirs, thread/device knobs, the per-run values) + throwaway HOME; `scrub_secrets` and `assert_no_secrets` stay as the second check before every exec. |
@@ -78,12 +78,47 @@ sast, sca — actions SHA-pinned; the toolkit repo is public, so the jobs run an
 
 **Accepted trade-off — `PYTHONPATH` is work dir + repo root, not work dir only.** Generated finance pipelines import the trusted data adapters (`replicator.data.adapters`), so the repo root is on the child's path in local mode. Consequence: generated code can drive adapter fetches (host-allow-listed, size-capped, cached under `data_cache/`) — it still cannot see credentials. In container mode (`--network none`) adapters cannot fetch at all: data must be pre-staged by the orchestrator (triage probes and the adapter cache under `data_cache/`, mounted read-only at `/app/data_cache`, where `CACHE_ROOT` resolves inside the image). Both modes are stated here so neither is a surprise.
 
+## Containment (P3): measured, not described
+
+The sandbox's containment claims are not prose. `tests/security/containment/matrix.py` runs one
+tiny, benign probe per claim (`tests/security/containment/probes/`) through the real `Sandbox`, in
+every execution mode that can start on the machine (`local` always; `container` when the docker
+daemon answers and the image exists, detected and never installed), and writes
+**[`security/containment-matrix.md`](security/containment-matrix.md)** (`.json` beside it): probe
+× mode, with what the probe managed to do, the mechanism that stopped it or the reason that mode
+does not enforce it, and the platform, Python, sandbox commit and timestamp of each measurement.
+Probe names and semantics follow the toolkit's P3 corpus (`env`, `cwd`, `socket`; the rest cover
+the limits this sandbox adds). `tests/security/containment/test_matrix.py` fails on any cell claimed
+as blocked that did not measure blocked, and on a committed matrix or a block below that is not a
+copy of a measurement; the `containment-matrix` CI job regenerates it on every push and uploads
+both files. A failing cell is a finding about the sandbox, never a reason to soften the claim.
+The block below is generated; every status word in it is copied from a cell.
+
+<!-- containment-matrix:begin -->
+<!-- generated by tests/security/containment/matrix.py from security/containment-matrix.json; do not edit by hand -->
+| Probe (what it tries) | local | container |
+|---|---|---|
+| `env`: read the orchestrator's canary environment variable | PASS | not run |
+| `cwd`: write a file by relative path | PASS | not run |
+| `abs-write`: write a file by absolute path, and by `..`, outside the work dir | N-A (cwd is a convenience, not a jail: absolute and `..` paths reach anything the user can write; the container backend makes the work dir the only writable mount) | not run |
+| `socket`: TCP connect to 127.0.0.1 on a closed port | N-A (network is NOT restricted in local mode (the run-log banner says so)) | not run |
+| `egress`: UDP connect() to a TEST-NET-1 address: a route lookup, no packet sent | N-A (network is NOT restricted in local mode (the run-log banner says so)) | not run |
+| `pids`: fork 96 sleeping children | PASS | not run |
+| `memory`: allocate and touch 300 MiB under a 61 MiB limit | PASS | not run |
+| `fsize`: write a 4 MiB file under a 1 MiB limit | PASS | not run |
+| `timeout`: spawn a grandchild and sleep past a 2s wall clock | PASS | not run |
+
+- `local`: measured 2026-11-26T16:46:29+00:00 on macOS-26.6.2-arm64-arm-64bit (arm64), python 3.12.14, sandbox 9ba481919187 +uncommitted sandbox.py
+- `container`: not run on any machine yet
+<!-- containment-matrix:end -->
+
 ## Remaining (tracked)
 
 1. **Container backend in daily use** — the `container` path is implemented (command shape and
-   kill-by-name unit-tested with a stand-in), but the image has not been built and exercised end
-   to end on this machine. Until `make sandbox-image` is run, the sandbox is `local` (announced in
-   every run log) and network egress from generated code is not restricted.
+   kill-by-name unit-tested with a stand-in) and CI measures its matrix column with a stand-in
+   image (`tests/security/containment/Dockerfile.probe`), but the real image has not been built and
+   exercised end to end on this machine. Until `make sandbox-image` is run, the sandbox is `local`
+   (announced in every run log) and network egress from generated code is not restricted.
 2. `papers/batch/resnet/work/assemble.py` (one-off, already-run, agent-produced) still uses
    `pickle.load` on the CIFAR-10 *python* batches, which are pickled dicts — `np.frombuffer` would
    need the *binary* distribution instead, i.e. a re-download, so it is left documented
@@ -206,6 +241,7 @@ code — the privilege-split / containment items above, not a string filter.
 ```bash
 .venv/bin/python -m pytest tests/security/ -q          # or: make security-tests
 .venv/bin/python -m pytest tests/ -q                   # whole suite; the smoke stage is the finance-path acceptance test
+.venv/bin/python -m tests.security.containment.matrix  # regenerate security/containment-matrix.{json,md} and the SECURITY.md block
 ../security-agents/semgrep/scan.sh .
 .venv/bin/python -m bandit -r replicator -q
 uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-package security-agents > /tmp/req.txt \
