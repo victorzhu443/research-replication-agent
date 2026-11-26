@@ -26,6 +26,10 @@ def run_reproduce(workdir: Path, config: dict[str, Any], seed: int, timeout_s: i
            "TOKENIZERS_PARALLELISM": "false"}
     if python:
         env["PYTHON"] = python
+    # Model-authored reproduce.sh never needs the orchestrator's LLM credentials; drop them so a
+    # generated script cannot read and exfiltrate the Anthropic key (see sandbox.scrub_secrets).
+    from ..build.sandbox import scrub_secrets
+    env = scrub_secrets(env)
     workdir = workdir.resolve()
     out = workdir / f"metrics_seed{seed}.json"
     if out.exists():

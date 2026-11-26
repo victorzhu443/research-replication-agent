@@ -15,6 +15,18 @@ from pathlib import Path
 
 BLACKLIST = re.compile(r"(github\.com|gitlab\.com|git clone|huggingface\.co/[\w\-]+/[\w\-]+/blob)", re.I)
 
+# The orchestrator's own LLM credentials. Model-authored code runs under the orchestrator's
+# identity (subprocess inherits its env; the finance path runs it in-process outright), and
+# network egress is open, so without scrubbing a generated program could read the Anthropic
+# key out of os.environ and exfiltrate it. No replication pipeline ever needs these, so
+# dropping them from every sandboxed/generated-code environment is free defense-in-depth.
+SECRET_ENV_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def scrub_secrets(env: dict) -> dict:
+    """Copy of env with the orchestrator's LLM-provider credentials removed."""
+    return {k: v for k, v in env.items() if k not in SECRET_ENV_KEYS}
+
 
 @dataclass
 class ExecResult:
@@ -45,7 +57,7 @@ class Sandbox:
         t0 = time.time()
         try:
             p = subprocess.run(argv, cwd=self.workdir, capture_output=True, text=True, timeout=timeout_s,
-                               env={**os.environ, **(env or {}), "PYTHONHASHSEED": "0"},
+                               env=scrub_secrets({**os.environ, **(env or {}), "PYTHONHASHSEED": "0"}),
                                preexec_fn=self._limits if sys.platform != "darwin" else None)
             res = ExecResult(p.returncode, p.stdout[-20000:], p.stderr[-20000:], time.time() - t0)
         except subprocess.TimeoutExpired as e:
