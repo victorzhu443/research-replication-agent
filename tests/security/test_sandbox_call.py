@@ -107,13 +107,14 @@ def test_banner_reaches_run_logger(work):
 
 
 def test_rss_watchdog_kills_over_limit(work):
-    """An over-limit allocation must never succeed. Two enforcement paths, both accepted:
+    """A child over the memory limit must never run to completion. Two enforcement paths, both accepted:
     (a) Linux enforces RLIMIT_AS, so the allocation itself fails with MemoryError (rc != 0);
-    (b) macOS treats RLIMIT_AS as advisory, so the RSS watchdog kills the group (rc 137 + message)."""
+    (b) macOS treats RLIMIT_AS as advisory, so the allocation lands and the RSS watchdog kills the
+        group (rc 137 + message) before the child gets any further."""
     sb = Sandbox(work, mem_gb=0.06, timeout_s=30)
     r = sb.python("b = bytearray(300 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096])\n"
-                  "print('ALLOCATED', flush=True)\nimport time; time.sleep(20)")
-    assert "ALLOCATED" not in r.stdout, "the over-limit allocation succeeded"
+                  "import time; time.sleep(20)\nprint('FINISHED', flush=True)")
+    assert "FINISHED" not in r.stdout, "the child ran to completion while over the memory limit"
     assert r.returncode != 0, "child exited 0 despite exceeding the memory limit"
     rlimit_path = "MemoryError" in r.stderr                                   # (a) RLIMIT_AS, live on Linux
     watchdog_path = r.returncode == 137 and "memory" in r.stderr and r.seconds < 15  # (b) RSS watchdog, macOS fallback
